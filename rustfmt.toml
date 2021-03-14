@@ -1,0 +1,8 @@
+edition = "2018"
+unstable_features = true
+format_strings = true
+max_width = 80
+# down not work on stable yet
+wrap_comments = true
+comment_width = 80
+license_template_path = "LICENSE.template"
