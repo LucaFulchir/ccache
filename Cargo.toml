@@ -10,3 +10,5 @@ description = "Window Tiny LFU implementation"
 [dependencies]
 
 thiserror = "1.0"
+lru = "0.6"
+

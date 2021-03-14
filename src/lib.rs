@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+mod lru;
+
 #[cfg(test)]
 mod tests {
     #[test]
