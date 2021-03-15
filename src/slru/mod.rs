@@ -57,19 +57,26 @@ impl<K: ::std::hash::Hash + Clone + Eq, V, HB: ::std::hash::BuildHasher>
         match self._probation.remove(&key) {
             Some(_) => {
                 // promote to protected
-                return self._protected.insert(key, val);
+                self._protected.insert(key, val)
             }
             None => {
                 match self._protected.make_head(&key) {
                     Err(Error::KeyNotFound) => {
                         // insert in probation
-                        return self._probation.insert(key, val);
+                        self._probation.insert(key, val)
                     }
-                    Ok(_) => {
-                        return InsertResult::Success;
-                    }
+                    Ok(_) => InsertResult::Success,
                 }
             }
+        }
+    }
+    pub fn remove(&mut self, key: &K) -> Option<V> {
+        match self._probation.remove(key) {
+            Some(val) => Some(val),
+            None => match self._protected.remove(key) {
+                Some(val) => Some(val),
+                None => None,
+            },
         }
     }
 }
