@@ -196,4 +196,54 @@ impl<K: ::std::hash::Hash + Clone + Eq, V, HB: ::std::hash::BuildHasher>
         self._head = None;
         self._tail = None;
     }
+    pub fn remove(&mut self, key: &K) -> Option<V> {
+        match self._hmap.remove(key) {
+            None => None,
+            Some(node) => {
+                if None == node.ll_head {
+                    // we removed the head
+                    match node.ll_tail {
+                        None => {
+                            // None == node.ll_head
+                            // None == node.ll_tail
+                            // we had only one element, we removed it
+                            self._head = None;
+                            self._tail = None;
+                        }
+                        Some(node_tail) => {
+                            // None == node.ll_head
+                            // Some(_) == node.ll_tail
+                            // we removed the head
+                            unsafe {
+                                (*node_tail).ll_head = None;
+                            }
+                            self._head = Some(node_tail);
+                        }
+                    }
+                } else {
+                    match node.ll_tail {
+                        None => {
+                            // Some(_) == node.ll_head
+                            // None == node.ll_tail
+                            // we removed the tail
+                            unsafe {
+                                (*node.ll_head.unwrap()).ll_tail = None;
+                            }
+                            self._tail = node.ll_head;
+                        }
+                        Some(node_tail) => {
+                            // Some(_) == node.ll_head
+                            // Some(_) == node.ll_tail
+                            // we removed an intermediate node
+                            unsafe {
+                                (*node.ll_head.unwrap()).ll_tail = node.ll_tail;
+                                (*node.ll_tail.unwrap()).ll_head = node.ll_head;
+                            }
+                        }
+                    }
+                }
+                Some(node.val)
+            }
+        }
+    }
 }
