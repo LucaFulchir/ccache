@@ -89,4 +89,8 @@ impl<K: ::std::hash::Hash + Clone + Eq, V, HB: ::std::hash::BuildHasher>
             },
         }
     }
+    pub fn clear(&mut self) {
+        self._probation.clear();
+        self._protected.clear();
+    }
 }
