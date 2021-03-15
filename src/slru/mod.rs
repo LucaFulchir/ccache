@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-use crate::results::{Error, InsertResult};
+use crate::results::InsertResult;
 
-// SLRU ( https://en.wikipedia.org/wiki/Cache_replacement_policies#Segmented_LRU_(SLRU) )
-// is a Segmented LRU it consists of two LRU:
-//  * probation LRU: for items that have been just added
-//  * protected LRU: items that were in the probation LRU and received a HIT
-// W-TinyLRU specifies an 20-80 split, with 80% for the probation LRU
+/// SLRU ( https://en.wikipedia.org/wiki/Cache_replacement_policies#Segmented_LRU_(SLRU) )
+/// is a Segmented LRU it consists of two LRU:
+///  * probation LRU: for items that have been just added
+///  * protected LRU: items that were in the probation LRU and received a HIT
+/// W-TinyLRU specifies an 20-80 split, with 80% for the probation LRU
 pub struct SLRU<K, V, HB> {
     _probation: crate::lru::LRU<K, V, HB>,
     _protected: crate::lru::LRU<K, V, HB>,
@@ -57,15 +57,25 @@ impl<K: ::std::hash::Hash + Clone + Eq, V, HB: ::std::hash::BuildHasher>
         match self._probation.remove(&key) {
             Some(_) => {
                 // promote to protected
-                self._protected.insert(key, val)
+                match self._protected.insert(key, val) {
+                    InsertResult::Success => InsertResult::Success,
+                    InsertResult::OldEntry(k, v) => {
+                        InsertResult::OldEntry(k, v)
+                    }
+                    InsertResult::OldTail(k, v) => {
+                        // values evicted from the protected LRU go into the
+                        // probation LRU
+                        self._probation.insert(k, v)
+                    }
+                }
             }
             None => {
-                match self._protected.make_head(&key) {
-                    Err(Error::KeyNotFound) => {
+                match self._protected.make_head(&key, val) {
+                    Some(value) => {
                         // insert in probation
-                        self._probation.insert(key, val)
+                        self._probation.insert(key, value)
                     }
-                    Ok(_) => InsertResult::Success,
+                    None => InsertResult::Success,
                 }
             }
         }

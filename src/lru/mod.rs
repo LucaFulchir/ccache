@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use crate::results::{Error, InsertResult};
+use crate::results::InsertResult;
 use ::std::collections::HashMap;
 
 struct Entry<K, V> {
@@ -244,11 +244,14 @@ impl<K: ::std::hash::Hash + Clone + Eq, V, HB: ::std::hash::BuildHasher>
     pub fn contains_key(&self, key: &K) -> bool {
         self._hmap.contains_key(key)
     }
-    pub fn make_head(&mut self, key: &K) -> Result<(), Error> {
+    /// make a key head, while chaning the contents of its value
+    /// Returns the value if the key is not present
+    pub fn make_head(&mut self, key: &K, val: V) -> Option<V> {
         // A tiny bit quicker than insert
         match self._hmap.get_mut(&key) {
-            None => Err(Error::KeyNotFound),
+            None => Some(val),
             Some(entry) => {
+                entry.val = val;
                 match entry.ll_head {
                     None => {
                         // already the head, nothing to do
@@ -282,7 +285,7 @@ impl<K: ::std::hash::Hash + Clone + Eq, V, HB: ::std::hash::BuildHasher>
                         }
                     }
                 }
-                Ok(())
+                None
             }
         }
     }

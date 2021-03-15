@@ -9,4 +9,3 @@ pub enum InsertResult<K, V> {
     OldTail(K, V),
     Success,
 }
-
