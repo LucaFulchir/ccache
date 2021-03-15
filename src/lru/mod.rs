@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use crate::results::{Error, InsertResult};
 use ::std::collections::HashMap;
 
 struct Entry<K, V> {
@@ -37,12 +38,6 @@ pub struct LRU<K, V, HB> {
 
     _head: Option<*mut Entry<K, V>>,
     _tail: Option<*mut Entry<K, V>>,
-}
-
-pub enum InsertResult<K, V> {
-    OldEntry(K, V),
-    OldTail(K, V),
-    Success,
 }
 
 impl<K: ::std::hash::Hash + Clone + Eq, V, HB: ::std::hash::BuildHasher>
@@ -237,12 +232,57 @@ impl<K: ::std::hash::Hash + Clone + Eq, V, HB: ::std::hash::BuildHasher>
                             // we removed an intermediate node
                             unsafe {
                                 (*node.ll_head.unwrap()).ll_tail = node.ll_tail;
-                                (*node.ll_tail.unwrap()).ll_head = node.ll_head;
+                                (*node_tail).ll_head = node.ll_head;
                             }
                         }
                     }
                 }
                 Some(node.val)
+            }
+        }
+    }
+    pub fn contains_key(&self, key: &K) -> bool {
+        self._hmap.contains_key(key)
+    }
+    pub fn make_head(&mut self, key: &K) -> Result<(), Error> {
+        // A tiny bit quicker than insert
+        match self._hmap.get_mut(&key) {
+            None => Err(Error::KeyNotFound),
+            Some(entry) => {
+                match entry.ll_head {
+                    None => {
+                        // already the head, nothing to do
+                    }
+                    Some(entry_head) => {
+                        unsafe {
+                            (*entry_head).ll_tail = entry.ll_tail;
+                        }
+                        match entry.ll_tail {
+                            None => {
+                                // we moved the tail to the head.
+                                unsafe {
+                                    (*self._head.unwrap()).ll_head =
+                                        Some(entry);
+                                    (*entry).ll_tail = self._head;
+                                }
+                                self._head = Some(entry);
+                                self._tail = Some(entry_head);
+                            }
+                            Some(entry_tail) => {
+                                // we promoted to head something in the middle
+                                // of the linked list
+                                unsafe {
+                                    (*entry_tail).ll_head = Some(entry_head);
+                                    (*entry_head).ll_tail = Some(entry_tail);
+                                    (*self._head.unwrap()).ll_head =
+                                        Some(entry);
+                                }
+                                self._head = Some(entry);
+                            }
+                        }
+                    }
+                }
+                Ok(())
             }
         }
     }
