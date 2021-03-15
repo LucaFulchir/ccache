@@ -316,12 +316,21 @@ impl<
             }
         }
     }
-    pub fn get(&mut self, key: &K) -> Option<&V> {
+    pub fn get(&mut self, key: &K) -> Option<(&V, &U)> {
         match self._hmap.get_mut(key) {
             None => None,
             Some(entry) => {
                 entry.user_data.on_get(&mut entry.val);
-                Some(&entry.val)
+                Some((&entry.val, &entry.user_data))
+            }
+        }
+    }
+    pub fn get_mut(&mut self, key: &K) -> Option<(&mut V, &mut U)> {
+        match self._hmap.get_mut(key) {
+            None => None,
+            Some(entry) => {
+                entry.user_data.on_get(&mut entry.val);
+                Some((&mut entry.val, &mut entry.user_data))
             }
         }
     }

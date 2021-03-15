@@ -101,4 +101,16 @@ impl<
         self._probation.clear();
         self._protected.clear();
     }
+    pub fn get(&mut self, key: &K) -> Option<(&V, &U)> {
+        match self._probation.get(key) {
+            Some((v, u)) => Some((v, u)),
+            None => self._protected.get(key),
+        }
+    }
+    pub fn get_mut(&mut self, key: &K) -> Option<(&mut V, &mut U)> {
+        match self._probation.get_mut(key) {
+            Some((v, u)) => Some((v, u)),
+            None => self._protected.get_mut(key),
+        }
+    }
 }
