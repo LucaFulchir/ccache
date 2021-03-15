@@ -15,15 +15,20 @@
  */
 
 use crate::results::InsertResult;
+use crate::UserMeta;
 use ::std::collections::HashMap;
 
-struct Entry<K, V> {
+struct Entry<K, V, U>
+where
+    U: UserMeta<V>,
+{
     // linked list towards head
-    ll_head: Option<*mut Entry<K, V>>,
+    ll_head: Option<*mut Entry<K, V, U>>,
     // linked list towards tail
-    ll_tail: Option<*mut Entry<K, V>>,
+    ll_tail: Option<*mut Entry<K, V, U>>,
     key: K,
     val: V,
+    user_data: U,
 }
 
 /// Simple LRU implementation
@@ -32,22 +37,30 @@ struct Entry<K, V> {
 // TODO: generalize: K in the first Hashmap template parameter is not
 // necessarily the same K in the Entry<K>
 // (e.g: could be a pointer to Entry<K>.key)
-pub struct LRU<K, V, HB> {
+pub struct LRU<K, V, U, HB>
+where
+    V: Sized,
+    U: UserMeta<V>,
+{
     _capacity: usize,
-    _hmap: HashMap<K, Entry<K, V>, HB>,
+    _hmap: HashMap<K, Entry<K, V, U>, HB>,
 
-    _head: Option<*mut Entry<K, V>>,
-    _tail: Option<*mut Entry<K, V>>,
+    _head: Option<*mut Entry<K, V, U>>,
+    _tail: Option<*mut Entry<K, V, U>>,
 }
 
-impl<K: ::std::hash::Hash + Clone + Eq, V, HB: ::std::hash::BuildHasher>
-    LRU<K, V, HB>
+impl<
+        K: ::std::hash::Hash + Clone + Eq,
+        V,
+        U: UserMeta<V>,
+        HB: ::std::hash::BuildHasher,
+    > LRU<K, V, U, HB>
 {
     pub fn new(
         entries: usize,
         extra_hashmap_capacity: usize,
         hash_builder: HB,
-    ) -> LRU<K, V, HB> {
+    ) -> LRU<K, V, U, HB> {
         LRU {
             _capacity: entries,
             // due to the possibilities of hash clashing, if the user has chosen
@@ -70,11 +83,20 @@ impl<K: ::std::hash::Hash + Clone + Eq, V, HB: ::std::hash::BuildHasher>
         }
     }
     pub fn insert(&mut self, key: K, val: V) -> InsertResult<K, V> {
+        self.insert_with_meta(key, val, U::new())
+    }
+    pub fn insert_with_meta(
+        &mut self,
+        key: K,
+        val: V,
+        user_data: U,
+    ) -> InsertResult<K, V> {
         let e = Entry {
             ll_head: None,
             ll_tail: self._head,
             key: key.clone(),
             val: val,
+            user_data: user_data,
         };
         // insert and get length and a ref to the value just inserted
         // we will use this ref to fix the linked lists in ll_tail/ll_head
@@ -84,7 +106,11 @@ impl<K: ::std::hash::Hash + Clone + Eq, V, HB: ::std::hash::BuildHasher>
         let just_inserted = self._hmap.get_mut(&key).unwrap();
 
         match maybe_old_entry {
-            Some(old_entry) => {
+            Some(mut old_entry) => {
+                just_inserted.user_data.on_insert(
+                    Some(&old_entry.user_data),
+                    Some(&mut old_entry.val),
+                );
                 // we removed something that was in the linked
                 // list due to hash clashing. fix the linked lists.
                 // In this case even the head or tail
@@ -151,6 +177,7 @@ impl<K: ::std::hash::Hash + Clone + Eq, V, HB: ::std::hash::BuildHasher>
                 }
             }
             None => {
+                just_inserted.user_data.on_insert(None, None);
                 // we did not clash with anything, but we might still be over
                 // capacity
                 if hashmap_len >= self._capacity {
@@ -286,6 +313,15 @@ impl<K: ::std::hash::Hash + Clone + Eq, V, HB: ::std::hash::BuildHasher>
                     }
                 }
                 None
+            }
+        }
+    }
+    pub fn get(&mut self, key: &K) -> Option<&V> {
+        match self._hmap.get_mut(key) {
+            None => None,
+            Some(entry) => {
+                entry.user_data.on_get(&mut entry.val);
+                Some(&entry.val)
             }
         }
     }

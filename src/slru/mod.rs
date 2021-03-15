@@ -15,26 +15,34 @@
  */
 
 use crate::results::InsertResult;
+use crate::UserMeta;
 
 /// SLRU ( https://en.wikipedia.org/wiki/Cache_replacement_policies#Segmented_LRU_(SLRU) )
 /// is a Segmented LRU it consists of two LRU:
 ///  * probation LRU: for items that have been just added
 ///  * protected LRU: items that were in the probation LRU and received a HIT
 /// W-TinyLRU specifies an 20-80 split, with 80% for the probation LRU
-pub struct SLRU<K, V, HB> {
-    _probation: crate::lru::LRU<K, V, HB>,
-    _protected: crate::lru::LRU<K, V, HB>,
+pub struct SLRU<K, V, U, HB>
+where
+    U: UserMeta<V>,
+{
+    _probation: crate::lru::LRU<K, V, U, HB>,
+    _protected: crate::lru::LRU<K, V, U, HB>,
 }
 
-impl<K: ::std::hash::Hash + Clone + Eq, V, HB: ::std::hash::BuildHasher>
-    SLRU<K, V, HB>
+impl<
+        K: ::std::hash::Hash + Clone + Eq,
+        V,
+        U: UserMeta<V>,
+        HB: ::std::hash::BuildHasher,
+    > SLRU<K, V, U, HB>
 {
     pub fn new(
         entries: usize,
         extra_hashmap_capacity: usize,
         hash_builder_probation: HB,
         hash_builder_protected: HB,
-    ) -> SLRU<K, V, HB> {
+    ) -> SLRU<K, V, U, HB> {
         let mut probation_entries: usize = (entries as f64 * 0.2) as usize;
         if entries > 0 && probation_entries == 0 {
             probation_entries = 1
