@@ -16,7 +16,7 @@
 
 pub mod lru;
 pub mod results;
-//pub mod slru;
+pub mod slru;
 
 #[cfg(test)]
 mod tests {
