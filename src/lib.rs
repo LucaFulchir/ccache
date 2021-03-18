@@ -17,6 +17,7 @@
 pub mod lru;
 pub mod results;
 pub mod slru;
+pub mod tlfu;
 
 /// The trait UserMeta defines operations that will be run on certain operations
 /// of the LRU
@@ -36,12 +37,4 @@ pub trait UserMeta<V> {
     fn on_insert(&mut self, old_meta: Option<&Self>, val: Option<&mut V>);
     /// run every time the key is requested
     fn on_get(&mut self, val: &mut V);
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-        assert_eq!(2 + 2, 4);
-    }
 }

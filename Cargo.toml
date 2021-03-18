@@ -10,4 +10,5 @@ description = "Window Tiny LFU implementation"
 [dependencies]
 
 thiserror = "1.0"
+bitvec = "0.21"
 
