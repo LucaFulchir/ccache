@@ -26,9 +26,53 @@ pub struct SLRU<K, V, U, HB>
 where
     U: user::Meta<V>,
 {
-    _probation: crate::lru::LRU<K, V, U, HB>,
-    _protected: crate::lru::LRU<K, V, U, HB>,
+    _hmap: ::std::collections::HashMap<K, user::Entry<K, V, U>, HB>,
+    _slru: SLRUShared<K, V, U, HB>,
 }
+
+impl<
+        K: ::std::hash::Hash + Clone + Eq,
+        V,
+        U: user::Meta<V>,
+        HB: ::std::hash::BuildHasher,
+    > SLRU<K, V, U, HB>
+{
+    pub fn new(
+        entries: usize,
+        extra_hashmap_capacity: usize,
+        hash_builder: HB,
+    ) -> SLRU<K, V, U, HB> {
+        let mut probation_entries: usize = (entries as f64 * 0.2) as usize;
+        if entries > 0 && probation_entries == 0 {
+            probation_entries = 1
+        }
+        let extra_hashmap_probation: usize = extra_hashmap_capacity / 2;
+        SLRU {
+            _hmap: ::std::collections::HashMap::with_capacity_and_hasher(
+                1 + entries + extra_hashmap_capacity,
+                hash_builder,
+            ),
+            _slru: SLRUShared::<K, V, U, HB>::new(entries),
+        }
+    }
+    pub fn insert(&mut self, key: K, val: V) -> InsertResult<K, V> {
+        self._slru.insert(&mut self._hmap, key, val)
+    }
+    pub fn remove(&mut self, key: &K) -> Option<V> {
+        self._slru.remove(&mut self._hmap, key)
+    }
+    pub fn clear(&mut self) {
+        self._hmap.clear();
+        self._slru.clear()
+    }
+    pub fn get(&mut self, key: &K) -> Option<(&V, &U)> {
+        self._slru.get(&mut self._hmap, key)
+    }
+    pub fn get_mut(&mut self, key: &K) -> Option<(&mut V, &mut U)> {
+        self._slru.get_mut(&mut self._hmap, key)
+    }
+}
+
 pub struct SLRUShared<K, V, U, HB>
 where
     U: user::Meta<V>,
@@ -44,15 +88,11 @@ impl<
         HB: ::std::hash::BuildHasher,
     > SLRUShared<K, V, U, HB>
 {
-    pub fn new(
-        entries: usize,
-        extra_hashmap_capacity: usize,
-    ) -> SLRUShared<K, V, U, HB> {
+    pub fn new(entries: usize) -> SLRUShared<K, V, U, HB> {
         let mut probation_entries: usize = (entries as f64 * 0.2) as usize;
         if entries > 0 && probation_entries == 0 {
             probation_entries = 1
         }
-        let extra_hashmap_probation: usize = extra_hashmap_capacity / 2;
         SLRUShared {
             _probation: crate::lru::LRUShared::<K, V, U, HB>::new(
                 probation_entries,
