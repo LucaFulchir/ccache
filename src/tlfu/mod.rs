@@ -17,7 +17,7 @@
 mod counter;
 
 use crate::results::InsertResult;
-use crate::UserMeta;
+use crate::user;
 use bitvec::prelude::*;
 
 /// Tiny LFU cache works by having a first bloom filter, called "doorkeper".
@@ -51,7 +51,7 @@ use bitvec::prelude::*;
 // and don't need to keep all generations
 pub struct TLFU<K, V, U, HB>
 where
-    U: UserMeta<V>,
+    U: user::Meta<V>,
 {
     _capacity: usize,
     _reset_counters: counter::Full,

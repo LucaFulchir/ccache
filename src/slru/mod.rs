@@ -15,7 +15,7 @@
  */
 
 use crate::results::InsertResult;
-use crate::UserMeta;
+use crate::user;
 
 /// SLRU ( https://en.wikipedia.org/wiki/Cache_replacement_policies#Segmented_LRU_(SLRU) )
 /// is a Segmented LRU it consists of two LRU:
@@ -24,48 +24,54 @@ use crate::UserMeta;
 /// W-TinyLRU specifies an 20-80 split, with 80% for the probation LRU
 pub struct SLRU<K, V, U, HB>
 where
-    U: UserMeta<V>,
+    U: user::Meta<V>,
 {
     _probation: crate::lru::LRU<K, V, U, HB>,
     _protected: crate::lru::LRU<K, V, U, HB>,
+}
+pub struct SLRUShared<K, V, U, HB>
+where
+    U: user::Meta<V>,
+{
+    _probation: crate::lru::LRUShared<K, V, U, HB>,
+    _protected: crate::lru::LRUShared<K, V, U, HB>,
 }
 
 impl<
         K: ::std::hash::Hash + Clone + Eq,
         V,
-        U: UserMeta<V>,
+        U: user::Meta<V>,
         HB: ::std::hash::BuildHasher,
-    > SLRU<K, V, U, HB>
+    > SLRUShared<K, V, U, HB>
 {
     pub fn new(
         entries: usize,
         extra_hashmap_capacity: usize,
-        hash_builder_probation: HB,
-        hash_builder_protected: HB,
-    ) -> SLRU<K, V, U, HB> {
+    ) -> SLRUShared<K, V, U, HB> {
         let mut probation_entries: usize = (entries as f64 * 0.2) as usize;
         if entries > 0 && probation_entries == 0 {
             probation_entries = 1
         }
         let extra_hashmap_probation: usize = extra_hashmap_capacity / 2;
-        SLRU {
-            _probation: crate::lru::LRU::new(
+        SLRUShared {
+            _probation: crate::lru::LRUShared::<K, V, U, HB>::new(
                 probation_entries,
-                extra_hashmap_probation,
-                hash_builder_probation,
             ),
-            _protected: crate::lru::LRU::new(
+            _protected: crate::lru::LRUShared::<K, V, U, HB>::new(
                 entries - probation_entries,
-                extra_hashmap_capacity - extra_hashmap_probation,
-                hash_builder_protected,
             ),
         }
     }
-    pub fn insert(&mut self, key: K, val: V) -> InsertResult<K, V> {
-        match self._probation.remove(&key) {
+    pub fn insert(
+        &mut self,
+        hmap: &mut ::std::collections::HashMap<K, user::Entry<K, V, U>, HB>,
+        key: K,
+        val: V,
+    ) -> InsertResult<K, V> {
+        match self._probation.remove(hmap, &key) {
             Some(_) => {
                 // promote to protected
-                match self._protected.insert(key, val) {
+                match self._protected.insert(hmap, key, val) {
                     InsertResult::Success => InsertResult::Success,
                     InsertResult::OldEntry(k, v) => {
                         InsertResult::OldEntry(k, v)
@@ -73,25 +79,29 @@ impl<
                     InsertResult::OldTail(k, v) => {
                         // values evicted from the protected LRU go into the
                         // probation LRU
-                        self._probation.insert(k, v)
+                        self._probation.insert(hmap, k, v)
                     }
                 }
             }
             None => {
-                match self._protected.make_head(&key, val) {
+                match self._protected.make_head(hmap, &key, val) {
                     Some(value) => {
                         // insert in probation
-                        self._probation.insert(key, value)
+                        self._probation.insert(hmap, key, value)
                     }
                     None => InsertResult::Success,
                 }
             }
         }
     }
-    pub fn remove(&mut self, key: &K) -> Option<V> {
-        match self._probation.remove(key) {
+    pub fn remove(
+        &mut self,
+        hmap: &mut ::std::collections::HashMap<K, user::Entry<K, V, U>, HB>,
+        key: &K,
+    ) -> Option<V> {
+        match self._probation.remove(hmap, key) {
             Some(val) => Some(val),
-            None => match self._protected.remove(key) {
+            None => match self._protected.remove(hmap, key) {
                 Some(val) => Some(val),
                 None => None,
             },
@@ -101,16 +111,22 @@ impl<
         self._probation.clear();
         self._protected.clear();
     }
-    pub fn get(&mut self, key: &K) -> Option<(&V, &U)> {
-        match self._probation.get(key) {
-            Some((v, u)) => Some((v, u)),
-            None => self._protected.get(key),
-        }
+    pub fn get<'a>(
+        &mut self,
+        hmap: &'a mut ::std::collections::HashMap<K, user::Entry<K, V, U>, HB>,
+        key: &K,
+    ) -> Option<(&'a V, &'a U)> {
+        // note that we share the hmap, so we don't need to check both probation
+        // and protected
+        self._probation.get(hmap, key)
     }
-    pub fn get_mut(&mut self, key: &K) -> Option<(&mut V, &mut U)> {
-        match self._probation.get_mut(key) {
-            Some((v, u)) => Some((v, u)),
-            None => self._protected.get_mut(key),
-        }
+    pub fn get_mut<'a>(
+        &mut self,
+        hmap: &'a mut ::std::collections::HashMap<K, user::Entry<K, V, U>, HB>,
+        key: &K,
+    ) -> Option<(&'a mut V, &'a mut U)> {
+        // note that we share the hmap, so we don't need to check both probation
+        // and protected
+        self._probation.get_mut(hmap, key)
     }
 }

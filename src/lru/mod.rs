@@ -15,41 +15,28 @@
  */
 
 use crate::results::InsertResult;
-use crate::UserMeta;
+use crate::user;
 use ::std::collections::HashMap;
 
-pub struct Entry<K, V, U>
-where
-    U: UserMeta<V>,
-{
-    // linked list towards head
-    ll_head: Option<*mut Entry<K, V, U>>,
-    // linked list towards tail
-    ll_tail: Option<*mut Entry<K, V, U>>,
-    key: K,
-    val: V,
-    user_data: U,
-}
-
-/// Simple LRU implementation
+// Simple LRU implementation
 /// note that we store the value as-is, so **if you need to grow the
 /// LRU dynamically, make sure to use `Box<V>` as the value**
 // TODO: generalize: K in the first Hashmap template parameter is not
-// necessarily the same K in the Entry<K>
-// (e.g: could be a pointer to Entry<K>.key)
+// necessarily the same K in the user::Entry<K>
+// (e.g: could be a pointer to user::Entry<K>.key)
 pub struct LRU<K, V, U, HB>
 where
     V: Sized,
-    U: UserMeta<V>,
+    U: user::Meta<V>,
 {
-    _hmap: ::std::collections::HashMap<K, Entry<K, V, U>, HB>,
+    _hmap: ::std::collections::HashMap<K, user::Entry<K, V, U>, HB>,
     _lru: LRUShared<K, V, U, HB>,
 }
 
 impl<
         K: ::std::hash::Hash + Clone + Eq,
         V,
-        U: UserMeta<V>,
+        U: user::Meta<V>,
         HB: ::std::hash::BuildHasher,
     > LRU<K, V, U, HB>
 {
@@ -79,7 +66,8 @@ impl<
             .insert_with_meta(&mut self._hmap, key, val, user_data)
     }
     pub fn clear(&mut self) {
-        self._lru.clear(&mut self._hmap)
+        self._hmap.clear();
+        self._lru.clear()
     }
     pub fn remove(&mut self, key: &K) -> Option<V> {
         self._lru.remove(&mut self._hmap, key)
@@ -101,19 +89,19 @@ impl<
 pub struct LRUShared<K, V, U, HB>
 where
     V: Sized,
-    U: UserMeta<V>,
+    U: user::Meta<V>,
 {
     _capacity: usize,
 
-    _head: Option<*mut Entry<K, V, U>>,
-    _tail: Option<*mut Entry<K, V, U>>,
+    _head: Option<*mut user::Entry<K, V, U>>,
+    _tail: Option<*mut user::Entry<K, V, U>>,
     _hashbuilder: ::std::marker::PhantomData<HB>,
 }
 
 impl<
         K: ::std::hash::Hash + Clone + Eq,
         V,
-        U: UserMeta<V>,
+        U: user::Meta<V>,
         HB: ::std::hash::BuildHasher,
     > LRUShared<K, V, U, HB>
 {
@@ -127,7 +115,7 @@ impl<
     }
     pub fn insert(
         &mut self,
-        hmap: &mut ::std::collections::HashMap<K, Entry<K, V, U>, HB>,
+        hmap: &mut ::std::collections::HashMap<K, user::Entry<K, V, U>, HB>,
         key: K,
         val: V,
     ) -> InsertResult<K, V> {
@@ -135,12 +123,12 @@ impl<
     }
     pub fn insert_with_meta(
         &mut self,
-        hmap: &mut ::std::collections::HashMap<K, Entry<K, V, U>, HB>,
+        hmap: &mut ::std::collections::HashMap<K, user::Entry<K, V, U>, HB>,
         key: K,
         val: V,
         user_data: U,
     ) -> InsertResult<K, V> {
-        let e = Entry {
+        let e = user::Entry {
             ll_head: None,
             ll_tail: self._head,
             key: key.clone(),
@@ -261,17 +249,13 @@ impl<
             }
         }
     }
-    pub fn clear(
-        &mut self,
-        hmap: &mut ::std::collections::HashMap<K, Entry<K, V, U>, HB>,
-    ) {
-        hmap.clear();
+    pub fn clear(&mut self) {
         self._head = None;
         self._tail = None;
     }
     pub fn remove(
         &mut self,
-        hmap: &mut ::std::collections::HashMap<K, Entry<K, V, U>, HB>,
+        hmap: &mut ::std::collections::HashMap<K, user::Entry<K, V, U>, HB>,
         key: &K,
     ) -> Option<V> {
         match hmap.remove(key) {
@@ -325,7 +309,7 @@ impl<
     }
     pub fn contains_key(
         &self,
-        hmap: &::std::collections::HashMap<K, Entry<K, V, U>, HB>,
+        hmap: &::std::collections::HashMap<K, user::Entry<K, V, U>, HB>,
         key: &K,
     ) -> bool {
         hmap.contains_key(key)
@@ -334,7 +318,7 @@ impl<
     /// Returns the value if the key is not present
     pub fn make_head(
         &mut self,
-        hmap: &mut ::std::collections::HashMap<K, Entry<K, V, U>, HB>,
+        hmap: &mut ::std::collections::HashMap<K, user::Entry<K, V, U>, HB>,
         key: &K,
         val: V,
     ) -> Option<V> {
@@ -382,7 +366,7 @@ impl<
     }
     pub fn get<'a>(
         &mut self,
-        hmap: &'a mut HashMap<K, Entry<K, V, U>, HB>,
+        hmap: &'a mut HashMap<K, user::Entry<K, V, U>, HB>,
         key: &K,
     ) -> Option<(&'a V, &'a U)> {
         match hmap.get_mut(key) {
@@ -395,7 +379,7 @@ impl<
     }
     pub fn get_mut<'a>(
         &mut self,
-        hmap: &'a mut HashMap<K, Entry<K, V, U>, HB>,
+        hmap: &'a mut HashMap<K, user::Entry<K, V, U>, HB>,
         key: &K,
     ) -> Option<(&'a mut V, &'a mut U)> {
         match hmap.get_mut(key) {
