@@ -18,7 +18,7 @@ use crate::results::InsertResult;
 use crate::UserMeta;
 use ::std::collections::HashMap;
 
-struct Entry<K, V, U>
+pub struct Entry<K, V, U>
 where
     U: UserMeta<V>,
 {
@@ -42,11 +42,8 @@ where
     V: Sized,
     U: UserMeta<V>,
 {
-    _capacity: usize,
-    _hmap: HashMap<K, Entry<K, V, U>, HB>,
-
-    _head: Option<*mut Entry<K, V, U>>,
-    _tail: Option<*mut Entry<K, V, U>>,
+    _hmap: ::std::collections::HashMap<K, Entry<K, V, U>, HB>,
+    _lru: LRUShared<K, V, U, HB>,
 }
 
 impl<
@@ -62,31 +59,83 @@ impl<
         hash_builder: HB,
     ) -> LRU<K, V, U, HB> {
         LRU {
-            _capacity: entries,
-            // due to the possibilities of hash clashing, if the user has chosen
-            // a weakish hash function, we can always clash, even if we have
-            // a free entry.
-            // So on insert we will insert on the hashmap before removing the
-            // tail. This can generate a moment where hashmap.len() >
-            // capacity. To avoid reallocation, allocate one more
-            // entry from the beginning.
-            //
-            // The extra capacity is to leave breathing room to the hasmap
-            // sine I did not check the actual implementation and do not know
-            // if having it too full gives problems (TODO: check)
             _hmap: ::std::collections::HashMap::with_capacity_and_hasher(
                 1 + entries + extra_hashmap_capacity,
                 hash_builder,
             ),
-            _head: None,
-            _tail: None,
+            _lru: LRUShared::<K, V, U, HB>::new(entries),
         }
     }
     pub fn insert(&mut self, key: K, val: V) -> InsertResult<K, V> {
-        self.insert_with_meta(key, val, U::new())
+        self._lru.insert(&mut self._hmap, key, val)
     }
     pub fn insert_with_meta(
         &mut self,
+        key: K,
+        val: V,
+        user_data: U,
+    ) -> InsertResult<K, V> {
+        self._lru
+            .insert_with_meta(&mut self._hmap, key, val, user_data)
+    }
+    pub fn clear(&mut self) {
+        self._lru.clear(&mut self._hmap)
+    }
+    pub fn remove(&mut self, key: &K) -> Option<V> {
+        self._lru.remove(&mut self._hmap, key)
+    }
+    pub fn contains_key(&self, key: &K) -> bool {
+        self._lru.contains_key(&self._hmap, key)
+    }
+    pub fn make_head(&mut self, key: &K, val: V) -> Option<V> {
+        self._lru.make_head(&mut self._hmap, key, val)
+    }
+    pub fn get(&mut self, key: &K) -> Option<(&V, &U)> {
+        self._lru.get(&mut self._hmap, key)
+    }
+    pub fn get_mut(&mut self, key: &K) -> Option<(&mut V, &mut U)> {
+        self._lru.get_mut(&mut self._hmap, key)
+    }
+}
+
+pub struct LRUShared<K, V, U, HB>
+where
+    V: Sized,
+    U: UserMeta<V>,
+{
+    _capacity: usize,
+
+    _head: Option<*mut Entry<K, V, U>>,
+    _tail: Option<*mut Entry<K, V, U>>,
+    _hashbuilder: ::std::marker::PhantomData<HB>,
+}
+
+impl<
+        K: ::std::hash::Hash + Clone + Eq,
+        V,
+        U: UserMeta<V>,
+        HB: ::std::hash::BuildHasher,
+    > LRUShared<K, V, U, HB>
+{
+    pub fn new(entries: usize) -> LRUShared<K, V, U, HB> {
+        LRUShared {
+            _capacity: entries,
+            _head: None,
+            _tail: None,
+            _hashbuilder: std::marker::PhantomData,
+        }
+    }
+    pub fn insert(
+        &mut self,
+        hmap: &mut ::std::collections::HashMap<K, Entry<K, V, U>, HB>,
+        key: K,
+        val: V,
+    ) -> InsertResult<K, V> {
+        self.insert_with_meta(hmap, key, val, U::new())
+    }
+    pub fn insert_with_meta(
+        &mut self,
+        hmap: &mut ::std::collections::HashMap<K, Entry<K, V, U>, HB>,
         key: K,
         val: V,
         user_data: U,
@@ -101,9 +150,9 @@ impl<
         // insert and get length and a ref to the value just inserted
         // we will use this ref to fix the linked lists in ll_tail/ll_head
         // of the various elements
-        let maybe_old_entry = self._hmap.insert(key.clone(), e);
-        let hashmap_len = self._hmap.len();
-        let just_inserted = self._hmap.get_mut(&key).unwrap();
+        let maybe_old_entry = hmap.insert(key.clone(), e);
+        let hashmap_len = hmap.len();
+        let just_inserted = hmap.get_mut(&key).unwrap();
 
         match maybe_old_entry {
             Some(mut old_entry) => {
@@ -185,8 +234,7 @@ impl<
                         (*self._head.unwrap()).ll_head = Some(just_inserted);
                     }
                     self._head = Some(just_inserted);
-                    let removed = self
-                        ._hmap
+                    let removed = hmap
                         .remove(unsafe { &(*self._tail.unwrap()).key })
                         .unwrap();
                     unsafe {
@@ -213,13 +261,20 @@ impl<
             }
         }
     }
-    pub fn clear(&mut self) {
-        self._hmap.clear();
+    pub fn clear(
+        &mut self,
+        hmap: &mut ::std::collections::HashMap<K, Entry<K, V, U>, HB>,
+    ) {
+        hmap.clear();
         self._head = None;
         self._tail = None;
     }
-    pub fn remove(&mut self, key: &K) -> Option<V> {
-        match self._hmap.remove(key) {
+    pub fn remove(
+        &mut self,
+        hmap: &mut ::std::collections::HashMap<K, Entry<K, V, U>, HB>,
+        key: &K,
+    ) -> Option<V> {
+        match hmap.remove(key) {
             None => None,
             Some(node) => {
                 if None == node.ll_head {
@@ -268,14 +323,23 @@ impl<
             }
         }
     }
-    pub fn contains_key(&self, key: &K) -> bool {
-        self._hmap.contains_key(key)
+    pub fn contains_key(
+        &self,
+        hmap: &::std::collections::HashMap<K, Entry<K, V, U>, HB>,
+        key: &K,
+    ) -> bool {
+        hmap.contains_key(key)
     }
     /// make a key head, while chaning the contents of its value
     /// Returns the value if the key is not present
-    pub fn make_head(&mut self, key: &K, val: V) -> Option<V> {
+    pub fn make_head(
+        &mut self,
+        hmap: &mut ::std::collections::HashMap<K, Entry<K, V, U>, HB>,
+        key: &K,
+        val: V,
+    ) -> Option<V> {
         // A tiny bit quicker than insert
-        match self._hmap.get_mut(&key) {
+        match hmap.get_mut(&key) {
             None => Some(val),
             Some(entry) => {
                 entry.val = val;
@@ -316,8 +380,12 @@ impl<
             }
         }
     }
-    pub fn get(&mut self, key: &K) -> Option<(&V, &U)> {
-        match self._hmap.get_mut(key) {
+    pub fn get<'a>(
+        &mut self,
+        hmap: &'a mut HashMap<K, Entry<K, V, U>, HB>,
+        key: &K,
+    ) -> Option<(&'a V, &'a U)> {
+        match hmap.get_mut(key) {
             None => None,
             Some(entry) => {
                 entry.user_data.on_get(&mut entry.val);
@@ -325,8 +393,12 @@ impl<
             }
         }
     }
-    pub fn get_mut(&mut self, key: &K) -> Option<(&mut V, &mut U)> {
-        match self._hmap.get_mut(key) {
+    pub fn get_mut<'a>(
+        &mut self,
+        hmap: &'a mut HashMap<K, Entry<K, V, U>, HB>,
+        key: &K,
+    ) -> Option<(&'a mut V, &'a mut U)> {
+        match hmap.get_mut(key) {
             None => None,
             Some(entry) => {
                 entry.user_data.on_get(&mut entry.val);
