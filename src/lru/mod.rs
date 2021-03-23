@@ -16,28 +16,35 @@
 
 use crate::results::InsertResult;
 use crate::user;
+use crate::user::EntryT;
 use ::std::collections::HashMap;
 
-// Simple LRU implementation
-/// note that we store the value as-is, so **if you need to grow the
-/// LRU dynamically, make sure to use `Box<V>` as the value**
+/// LRU implementation that wraps LRUShared
+/// note that we store the value as-is and we have pointers to those,
+/// so **if you need to grow the LRU dynamically, make sure to use `Box<V>
+/// as the value**
 // TODO: generalize: K in the first Hashmap template parameter is not
 // necessarily the same K in the user::Entry<K>
 // (e.g: could be a pointer to user::Entry<K>.key)
-/*
 pub struct LRU<K, V, Umeta, HB>
 where
     V: Sized,
-    U: user::Meta<V>,
+    Umeta: user::Meta<V>,
 {
     _hmap: ::std::collections::HashMap<
         K,
         user::Etry<K, V, ::std::marker::PhantomData<K>, Umeta>,
         HB,
     >,
-    _lru: LRUShared<K, V, ::std::marker::PhantomData<K>, Umeta, HB>,
+    _lru: LRUShared<
+        user::Etry<K, V, ::std::marker::PhantomData<K>, Umeta>,
+        K,
+        V,
+        ::std::marker::PhantomData<K>,
+        Umeta,
+        HB,
+    >,
 }
-
 impl<
         K: ::std::hash::Hash + Clone + Eq,
         V,
@@ -55,13 +62,17 @@ impl<
                 1 + entries + extra_hashmap_capacity,
                 hash_builder,
             ),
-            _lru:
-                LRUShared::<K, V, ::std::marker::PhantomData<K>, Umeta, HB>::new(
-                    entries,
-                ),
+            _lru: LRUShared::<
+                user::Etry<K, V, ::std::marker::PhantomData<K>, Umeta>,
+                K,
+                V,
+                ::std::marker::PhantomData<K>,
+                Umeta,
+                HB,
+            >::new(entries, ::std::marker::PhantomData),
         }
     }
-    pub fn insert(&mut self, key: K, val: V) -> InsertResult<K, V> {
+    pub fn insert(&mut self, key: K, val: V) -> InsertResult<(K, V, Umeta)> {
         self.insert_with_meta(key, val, Umeta::new())
     }
     pub fn insert_with_meta(
@@ -69,52 +80,80 @@ impl<
         key: K,
         val: V,
         user_data: Umeta,
-    ) -> InsertResult<K, V> {
-        let e = user::Entry {
-            ll_head: None,
-            ll_tail: self._head,
-            key: key.clone(),
-            val: val,
-            user_data: user_data,
-        };
+    ) -> InsertResult<(K, V, Umeta)> {
+        let e =
+            user::Etry::<K, V, ::std::marker::PhantomData<K>, Umeta>::new_entry(
+                None,
+                None,
+                key.clone(),
+                val,
+                ::std::marker::PhantomData,
+                user_data,
+            );
         // insert and get length and a ref to the value just inserted
         // we will use this ref to fix the linked lists in ll_tail/ll_head
         // of the various elements
-        let maybe_old_entry = hmap.insert(key.clone(), e);
-        let just_inserted = hmap.get_mut(&key).unwrap();
-        self._lru.insert_with_meta(
-            &mut self._hmap,
-            &maybe_old_entry,
-            &mut just_inserted,
-        )
+        let maybe_old_entry = self._hmap.insert(key.clone(), e);
+        match self
+            ._lru
+            .insert_shared(&mut self._hmap, maybe_old_entry, &key)
+        {
+            InsertResult::Success => InsertResult::Success,
+            InsertResult::OldTail(tail) => {
+                InsertResult::OldTail(tail.deconstruct())
+            }
+            InsertResult::OldEntry(entry) => {
+                InsertResult::OldEntry(entry.deconstruct())
+            }
+        }
     }
     pub fn clear(&mut self) {
         self._hmap.clear();
-        self._lru.clear()
+        self._lru.clear_shared()
     }
-    pub fn remove(&mut self, key: &K) -> Option<V> {
-        let entry = self._hmap.remove(key);
-        self._lru.remove(&mut entry);
+    pub fn remove(&mut self, key: &K) -> Option<(V, Umeta)> {
+        match self._hmap.remove(key) {
+            None => None,
+            Some(entry) => {
+                self._lru.remove_shared(&entry);
+                let (_, val, meta) = entry.deconstruct();
+                Some((val, meta))
+            }
+        }
     }
     pub fn contains_key(&self, key: &K) -> bool {
-        self._lru.contains_key(&self._hmap, key)
+        self._hmap.contains_key(&key)
     }
-    pub fn make_head(&mut self, key: &K, val: V) -> Option<V> {
-        self._lru.make_head(&mut self._hmap, key, val)
+    /// If present, make the entry the head of the LRU, and return pointers to
+    /// the values
+    pub fn make_head(&mut self, key: &K) -> Option<(&V, &Umeta)> {
+        match self._hmap.get_mut(key) {
+            None => None,
+            Some(mut entry) => {
+                self._lru.make_head(&mut entry);
+                Some((entry.get_val(), entry.get_user()))
+            }
+        }
     }
-    pub fn get(&mut self, key: &K) -> Option<(&V, &U)> {
-        self._lru.get(&mut self._hmap, key)
+    pub fn get(&self, key: &K) -> Option<(&V, &Umeta)> {
+        match self._hmap.get(key) {
+            None => None,
+            Some(entry) => Some((entry.get_val(), entry.get_user())),
+        }
     }
-    pub fn get_mut(&mut self, key: &K) -> Option<(&mut V, &mut U)> {
-        self._lru.get_mut(&mut self._hmap, key)
+    pub fn get_mut(&mut self, key: &K) -> Option<(&mut V, &mut Umeta)> {
+        match self._hmap.get_mut(key) {
+            None => None,
+            //Some(mut entry) => Some((entry.get_val(), entry.get_user())),
+            Some(entry) => Some(entry.get_val_user_mut()),
+        }
     }
 }
-*/
 pub struct LRUShared<E, K, V, Cid, Umeta, HB>
 where
     E: user::EntryT<K, V, Cid, Umeta>,
     V: Sized,
-    Cid: ::num_traits::int::PrimInt,
+    Cid: Eq,
     Umeta: user::Meta<V>,
 {
     _capacity: usize,
@@ -133,7 +172,7 @@ impl<
         E: user::EntryT<K, V, Cid, Umeta>,
         K: ::std::hash::Hash + Clone + Eq,
         V,
-        Cid: ::num_traits::int::PrimInt,
+        Cid: Eq,
         Umeta: user::Meta<V>,
         HB: ::std::hash::BuildHasher,
     > LRUShared<E, K, V, Cid, Umeta, HB>
@@ -166,8 +205,9 @@ impl<
         &mut self,
         hmap: &mut ::std::collections::HashMap<K, E, HB>,
         maybe_old_entry: Option<E>,
-        just_inserted: &mut E,
+        key: &K,
     ) -> InsertResult<E> {
+        let just_inserted = hmap.get_mut(&key).unwrap();
         self._used += 1;
 
         match maybe_old_entry {
@@ -245,15 +285,13 @@ impl<
                         self._head = Some(just_inserted);
                         return InsertResult::OldEntry(old_entry);
                     }
-                    Some(old_hentry_head) => {
+                    Some(old_entry_head) => {
                         match old_entry.get_tail_ptr() {
                             None => {
                                 // Some(_) == old_entry.head
                                 // None    == old_entry.tail
                                 // we removed the old tail, with a hash clash
                                 // the new tail is the prev of the old tail.
-                                let old_entry_head =
-                                    old_entry.get_head_ptr().unwrap();
                                 unsafe {
                                     (*old_entry_head).set_tail_ptr(None);
                                     (*self._head.unwrap())
@@ -268,7 +306,7 @@ impl<
                                 // Some(_) == old_entry.tail
                                 // we removed something in the middle
                                 unsafe {
-                                    (*old_entry.get_tail_ptr().unwrap())
+                                    (*old_entry_tail)
                                         .set_head_ptr(old_entry.get_head_ptr());
                                     (*old_entry.get_head_ptr().unwrap())
                                         .set_tail_ptr(old_entry.get_tail_ptr());
@@ -288,7 +326,7 @@ impl<
         self._head = None;
         self._tail = None;
     }
-    pub fn remove_shared(&mut self, entry: &mut E) {
+    pub fn remove_shared(&mut self, entry: &E) {
         if None == entry.get_head_ptr() {
             // we removed the head
             match entry.get_tail_ptr() {

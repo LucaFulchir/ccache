@@ -38,6 +38,23 @@ pub trait Meta<V> {
     fn on_get(&mut self, val: &mut V);
 }
 
+/// The simplest of implementation for metadata:
+/// No metadata, don't take up space and don't  do anything
+pub struct ZeroMeta {}
+
+impl<V> Meta<V> for ZeroMeta {
+    fn new() -> Self {
+        ZeroMeta {}
+    }
+    fn on_insert(
+        &mut self,
+        _current_val: &mut V,
+        _old_entry: Option<(&Self, &mut V)>,
+    ) {
+    }
+    fn on_get(&mut self, _val: &mut V) {}
+}
+
 pub struct Entry<K, V, U>
 where
     U: Meta<V>,
@@ -67,9 +84,9 @@ where
         user_data: Umeta,
     ) -> Self;
     fn get_head_ptr(&self) -> Option<*mut Self>;
-    fn get_tail_ptr(&self) -> Option<*mut Self>;
-
     fn set_head_ptr(&mut self, head: Option<*mut Self>);
+
+    fn get_tail_ptr(&self) -> Option<*mut Self>;
     fn set_tail_ptr(&mut self, tail: Option<*mut Self>);
 
     fn get_key(&self) -> &K;
@@ -78,8 +95,13 @@ where
     fn get_val_mut(&mut self) -> &mut V;
 
     fn get_cache_id_mut(&mut self) -> &mut Cid;
+    fn deconstruct(self) -> (K, V, Umeta);
 
+    fn get_user(&self) -> &Umeta;
     fn get_user_mut(&mut self) -> &mut Umeta;
+
+    fn get_val_user_mut(&mut self) -> (&mut V, &mut Umeta);
+
     fn user_on_insert(&mut self, old_entry: Option<&mut Self>);
 }
 
@@ -119,16 +141,15 @@ impl<K, V, Cid, Umeta: Meta<V>> EntryT<K, V, Cid, Umeta>
     fn get_head_ptr(&self) -> Option<*mut Self> {
         self.ll_head
     }
-    fn get_tail_ptr(&self) -> Option<*mut Self> {
-        self.ll_tail
-    }
     fn set_head_ptr(&mut self, head: Option<*mut Self>) {
         self.ll_head = head;
+    }
+    fn get_tail_ptr(&self) -> Option<*mut Self> {
+        self.ll_tail
     }
     fn set_tail_ptr(&mut self, tail: Option<*mut Self>) {
         self.ll_tail = tail;
     }
-
     fn get_key(&self) -> &K {
         &self.key
     }
@@ -142,14 +163,22 @@ impl<K, V, Cid, Umeta: Meta<V>> EntryT<K, V, Cid, Umeta>
     fn get_cache_id_mut(&mut self) -> &mut Cid {
         &mut self.cache_id
     }
-
+    fn get_user(&self) -> &Umeta {
+        &self.user_data
+    }
     fn get_user_mut(&mut self) -> &mut Umeta {
         &mut self.user_data
+    }
+    fn get_val_user_mut(&mut self) -> (&mut V, &mut Umeta) {
+        (&mut self.val, &mut self.user_data)
+    }
+    fn deconstruct(self) -> (K, V, Umeta) {
+        (self.key, self.val, self.user_data)
     }
     fn user_on_insert(&mut self, old_entry: Option<&mut Self>) {
         match old_entry {
             None => self.user_data.on_insert(&mut self.val, None),
-            Some(mut old_meta) => self.user_data.on_insert(
+            Some(old_meta) => self.user_data.on_insert(
                 &mut self.val,
                 Some((&mut old_meta.user_data, &mut old_meta.val)),
             ),
