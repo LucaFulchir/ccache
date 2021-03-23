@@ -56,6 +56,12 @@ pub struct Full {
 
 impl Full {
     #[inline]
+    pub fn new() -> Full {
+        Full {
+            counter: 0, // generation: Day
+        }
+    }
+    #[inline]
     fn generation(&self) -> Generation {
         ((self.counter & GenerationMask) != 0).into()
     }

@@ -4,8 +4,8 @@ pub enum Error {
     KeyNotFound,
 }
 
-pub enum InsertResult<K, V> {
-    OldEntry(K, V),
-    OldTail(K, V),
+pub enum InsertResult<E> {
+    OldEntry(E),
+    OldTail(E),
     Success,
 }

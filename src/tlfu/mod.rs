@@ -49,7 +49,7 @@ use bitvec::prelude::*;
 // last-reset counter. each access will check and halve just one more element
 // this will mean that after `W` operations we have halved the whole counters
 // and don't need to keep all generations
-pub struct TLFU<K, V, U, HB>
+pub struct TLFUShared<K, V, U, HB>
 where
     U: user::Meta<V>,
 {
@@ -57,5 +57,25 @@ where
     _reset_counters: counter::Full,
     _doorkeeper: ::bitvec::vec::BitVec<Msb0, u64>,
     _counters: ::std::vec::Vec<counter::Full>,
-    _slru: crate::slru::SLRU<K, V, U, HB>,
+    _slru: crate::slru::SLRUShared<K, V, U, HB>,
+}
+
+impl<
+        K: ::std::hash::Hash + Clone + Eq,
+        V,
+        U: user::Meta<V>,
+        HB: ::std::hash::BuildHasher,
+    > TLFUShared<K, V, U, HB>
+{
+    pub fn new(entries: usize) -> TLFUShared<K, V, U, HB> {
+        TLFUShared {
+            _capacity: entries,
+            _reset_counters: counter::Full::new(),
+            _doorkeeper: ::bitvec::vec::BitVec::<Msb0, u64>::with_capacity(
+                entries,
+            ),
+            _counters: ::std::vec::Vec::<counter::Full>::with_capacity(entries),
+            _slru: crate::slru::SLRUShared::<K, V, U, HB>::new(entries),
+        }
+    }
 }

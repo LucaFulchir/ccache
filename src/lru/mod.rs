@@ -24,53 +24,77 @@ use ::std::collections::HashMap;
 // TODO: generalize: K in the first Hashmap template parameter is not
 // necessarily the same K in the user::Entry<K>
 // (e.g: could be a pointer to user::Entry<K>.key)
-pub struct LRU<K, V, U, HB>
+/*
+pub struct LRU<K, V, Umeta, HB>
 where
     V: Sized,
     U: user::Meta<V>,
 {
-    _hmap: ::std::collections::HashMap<K, user::Entry<K, V, U>, HB>,
-    _lru: LRUShared<K, V, U, HB>,
+    _hmap: ::std::collections::HashMap<
+        K,
+        user::Etry<K, V, ::std::marker::PhantomData<K>, Umeta>,
+        HB,
+    >,
+    _lru: LRUShared<K, V, ::std::marker::PhantomData<K>, Umeta, HB>,
 }
 
 impl<
         K: ::std::hash::Hash + Clone + Eq,
         V,
-        U: user::Meta<V>,
+        Umeta: user::Meta<V>,
         HB: ::std::hash::BuildHasher,
-    > LRU<K, V, U, HB>
+    > LRU<K, V, Umeta, HB>
 {
     pub fn new(
         entries: usize,
         extra_hashmap_capacity: usize,
         hash_builder: HB,
-    ) -> LRU<K, V, U, HB> {
+    ) -> LRU<K, V, Umeta, HB> {
         LRU {
             _hmap: ::std::collections::HashMap::with_capacity_and_hasher(
                 1 + entries + extra_hashmap_capacity,
                 hash_builder,
             ),
-            _lru: LRUShared::<K, V, U, HB>::new(entries),
+            _lru:
+                LRUShared::<K, V, ::std::marker::PhantomData<K>, Umeta, HB>::new(
+                    entries,
+                ),
         }
     }
     pub fn insert(&mut self, key: K, val: V) -> InsertResult<K, V> {
-        self._lru.insert(&mut self._hmap, key, val)
+        self.insert_with_meta(key, val, Umeta::new())
     }
     pub fn insert_with_meta(
         &mut self,
         key: K,
         val: V,
-        user_data: U,
+        user_data: Umeta,
     ) -> InsertResult<K, V> {
-        self._lru
-            .insert_with_meta(&mut self._hmap, key, val, user_data)
+        let e = user::Entry {
+            ll_head: None,
+            ll_tail: self._head,
+            key: key.clone(),
+            val: val,
+            user_data: user_data,
+        };
+        // insert and get length and a ref to the value just inserted
+        // we will use this ref to fix the linked lists in ll_tail/ll_head
+        // of the various elements
+        let maybe_old_entry = hmap.insert(key.clone(), e);
+        let just_inserted = hmap.get_mut(&key).unwrap();
+        self._lru.insert_with_meta(
+            &mut self._hmap,
+            &maybe_old_entry,
+            &mut just_inserted,
+        )
     }
     pub fn clear(&mut self) {
         self._hmap.clear();
         self._lru.clear()
     }
     pub fn remove(&mut self, key: &K) -> Option<V> {
-        self._lru.remove(&mut self._hmap, key)
+        let entry = self._hmap.remove(key);
+        self._lru.remove(&mut entry);
     }
     pub fn contains_key(&self, key: &K) -> bool {
         self._lru.contains_key(&self._hmap, key)
@@ -85,152 +109,88 @@ impl<
         self._lru.get_mut(&mut self._hmap, key)
     }
 }
-
-pub struct LRUShared<K, V, U, HB>
+*/
+pub struct LRUShared<E, K, V, Cid, Umeta, HB>
 where
+    E: user::EntryT<K, V, Cid, Umeta>,
     V: Sized,
-    U: user::Meta<V>,
+    Cid: ::num_traits::int::PrimInt,
+    Umeta: user::Meta<V>,
 {
     _capacity: usize,
+    _used: usize,
 
-    _head: Option<*mut user::Entry<K, V, U>>,
-    _tail: Option<*mut user::Entry<K, V, U>>,
+    _head: Option<*mut E>,
+    _tail: Option<*mut E>,
+    _cache_id: Cid,
+    _key: ::std::marker::PhantomData<K>,
+    _val: ::std::marker::PhantomData<V>,
+    _meta: ::std::marker::PhantomData<Umeta>,
     _hashbuilder: ::std::marker::PhantomData<HB>,
 }
 
 impl<
+        E: user::EntryT<K, V, Cid, Umeta>,
         K: ::std::hash::Hash + Clone + Eq,
         V,
-        U: user::Meta<V>,
+        Cid: ::num_traits::int::PrimInt,
+        Umeta: user::Meta<V>,
         HB: ::std::hash::BuildHasher,
-    > LRUShared<K, V, U, HB>
+    > LRUShared<E, K, V, Cid, Umeta, HB>
 {
-    pub fn new(entries: usize) -> LRUShared<K, V, U, HB> {
+    /// Build a LRU that works on someone else's hasmap
+    /// In this case each cache should have a different `Cid` (Cache ID) so that
+    /// everyone known whose elements is being used, and call the proper
+    /// cache methods
+    pub fn new(
+        entries: usize,
+        cache_id: Cid,
+    ) -> LRUShared<E, K, V, Cid, Umeta, HB> {
         LRUShared {
             _capacity: entries,
+            _used: 0,
             _head: None,
             _tail: None,
+            _cache_id: cache_id,
+            _key: ::std::marker::PhantomData,
+            _val: ::std::marker::PhantomData,
+            _meta: ::std::marker::PhantomData,
             _hashbuilder: std::marker::PhantomData,
         }
     }
-    pub fn insert(
+    /// `insert_shared` does not actually insert anything. It will only fix
+    /// the LRU linked lists after something has been inserted by the parent
+    /// note that ~maybe_old_entry` should be != `None` if and only if the
+    /// ols entry is part of the same cache
+    pub fn insert_shared(
         &mut self,
-        hmap: &mut ::std::collections::HashMap<K, user::Entry<K, V, U>, HB>,
-        key: K,
-        val: V,
-    ) -> InsertResult<K, V> {
-        self.insert_with_meta(hmap, key, val, U::new())
-    }
-    pub fn insert_with_meta(
-        &mut self,
-        hmap: &mut ::std::collections::HashMap<K, user::Entry<K, V, U>, HB>,
-        key: K,
-        val: V,
-        user_data: U,
-    ) -> InsertResult<K, V> {
-        let e = user::Entry {
-            ll_head: None,
-            ll_tail: self._head,
-            key: key.clone(),
-            val: val,
-            user_data: user_data,
-        };
-        // insert and get length and a ref to the value just inserted
-        // we will use this ref to fix the linked lists in ll_tail/ll_head
-        // of the various elements
-        let maybe_old_entry = hmap.insert(key.clone(), e);
-        let hashmap_len = hmap.len();
-        let just_inserted = hmap.get_mut(&key).unwrap();
+        hmap: &mut ::std::collections::HashMap<K, E, HB>,
+        maybe_old_entry: Option<E>,
+        just_inserted: &mut E,
+    ) -> InsertResult<E> {
+        self._used += 1;
 
         match maybe_old_entry {
-            Some(mut old_entry) => {
-                just_inserted.user_data.on_insert(
-                    Some(&old_entry.user_data),
-                    Some(&mut old_entry.val),
-                );
-                // we removed something that was in the linked
-                // list due to hash clashing. fix the linked lists.
-                // In this case even the head or tail
-                // might need to be changed
-                if None == old_entry.ll_head {
-                    // we removed the old head with the hash clash
-                    just_inserted.ll_tail = old_entry.ll_tail;
-                    match old_entry.ll_tail {
-                        None => {
-                            // None    == old_entry.ll_head
-                            // None    == old_entry.ll_tail
-                            // basically the only element in the LRU
-                            // noth head and tail
-                            self._tail = Some(just_inserted);
-                        }
-                        Some(node) => unsafe {
-                            // None    == old_entry.ll_head
-                            // Some(_) == old_entry.ll_tail
-                            // the head of the LRU
-                            (*node).ll_head = Some(just_inserted)
-                        },
-                    }
-                    self._head = Some(just_inserted);
-                    return InsertResult::OldEntry(
-                        old_entry.key,
-                        old_entry.val,
-                    );
-                } else {
-                    if None == old_entry.ll_tail {
-                        // Some(_) == old_entry.ll_head
-                        // None    == old_entry.ll_tail
-                        // we removed the old tail, with a hash clash
-                        // the new tail is the prev of the old tail.
-                        let node = old_entry.ll_head.unwrap();
-                        unsafe {
-                            (*node).ll_tail = None;
-                            (*self._head.unwrap()).ll_head =
-                                Some(just_inserted);
-                        }
-                        self._head = Some(just_inserted);
-                        self._tail = Some(node);
-                        return InsertResult::OldTail(
-                            old_entry.key,
-                            old_entry.val,
-                        );
-                    } else {
-                        // Some(_) == old_entry.ll_head
-                        // Some(_) == old_entry.ll_tail
-                        // we removed something in the middle
-                        unsafe {
-                            (*old_entry.ll_tail.unwrap()).ll_head =
-                                old_entry.ll_head;
-                            (*old_entry.ll_head.unwrap()).ll_tail =
-                                old_entry.ll_tail;
-                            (*self._head.unwrap()).ll_head =
-                                Some(just_inserted);
-                        }
-                        self._head = Some(just_inserted);
-                        return InsertResult::OldEntry(
-                            old_entry.key,
-                            old_entry.val,
-                        );
-                    }
-                }
-            }
             None => {
-                just_inserted.user_data.on_insert(None, None);
+                just_inserted.user_on_insert(None);
                 // we did not clash with anything, but we might still be over
                 // capacity
-                if hashmap_len >= self._capacity {
+                if self._used >= self._capacity {
+                    // reset head & tail to correct values, returen old tail
                     unsafe {
-                        (*self._head.unwrap()).ll_head = Some(just_inserted);
+                        (*self._head.unwrap())
+                            .set_head_ptr(Some(just_inserted));
                     }
                     self._head = Some(just_inserted);
                     let removed = hmap
-                        .remove(unsafe { &(*self._tail.unwrap()).key })
+                        .remove(unsafe { (*self._tail.unwrap()).get_key() })
                         .unwrap();
                     unsafe {
-                        let node = (*self._tail.unwrap()).ll_head.unwrap();
-                        (*node).ll_tail = None;
-                        self._tail = Some(node);
+                        let rm_tail_head = removed.get_head_ptr().unwrap();
+                        (*rm_tail_head).set_tail_ptr(None);
+                        self._tail = Some(rm_tail_head);
                     }
-                    return InsertResult::OldTail(removed.key, removed.val);
+                    return InsertResult::OldTail(removed);
                 }
                 match self._head {
                     None => {
@@ -238,155 +198,172 @@ impl<
                         self._head = Some(just_inserted);
                         self._tail = Some(just_inserted);
                     }
-                    Some(node) => {
+                    Some(old_head) => {
                         // just a new entry on a non-filled LRU
-
-                        unsafe { (*node).ll_head = Some(just_inserted) };
+                        unsafe {
+                            (*old_head).set_head_ptr(Some(just_inserted))
+                        };
                         self._head = Some(just_inserted);
                     }
                 }
                 return InsertResult::Success;
             }
+            Some(mut old_entry) => {
+                // the callee has added an element to the hashmap, but it
+                // clashed with something. We'll have to keep track of it and
+                // we should fix it
+                //
+                // By definition, we know that we get the 'old_entry' only if it
+                // is in the same cache_id as us
+
+                just_inserted.user_on_insert(Some(&mut old_entry));
+                // the clash was on something in our own cache, we got
+                // lucky. In this case even the head or
+                // tail might need to be changed
+                match old_entry.get_head_ptr() {
+                    None => {
+                        // we removed the old head with the hash clash
+                        just_inserted.set_tail_ptr(old_entry.get_tail_ptr());
+                        match old_entry.get_tail_ptr() {
+                            None => {
+                                // None    == old_entry.head
+                                // None    == old_entry.tail
+                                // basically the only element in the LRU
+                                // both head and tail
+                                self._tail = Some(just_inserted);
+                            }
+                            Some(old_entry_tail) => {
+                                unsafe {
+                                    // None    == old_entry.head
+                                    // Some(_) == old_entry.tail
+                                    // the head of the LRU
+                                    (*old_entry_tail)
+                                        .set_head_ptr(Some(just_inserted));
+                                }
+                            }
+                        }
+                        self._head = Some(just_inserted);
+                        return InsertResult::OldEntry(old_entry);
+                    }
+                    Some(old_hentry_head) => {
+                        match old_entry.get_tail_ptr() {
+                            None => {
+                                // Some(_) == old_entry.head
+                                // None    == old_entry.tail
+                                // we removed the old tail, with a hash clash
+                                // the new tail is the prev of the old tail.
+                                let old_entry_head =
+                                    old_entry.get_head_ptr().unwrap();
+                                unsafe {
+                                    (*old_entry_head).set_tail_ptr(None);
+                                    (*self._head.unwrap())
+                                        .set_head_ptr(Some(just_inserted));
+                                }
+                                self._head = Some(just_inserted);
+                                self._tail = Some(old_entry_head);
+                                return InsertResult::OldTail(old_entry);
+                            }
+                            Some(old_entry_tail) => {
+                                // Some(_) == old_entry.head
+                                // Some(_) == old_entry.tail
+                                // we removed something in the middle
+                                unsafe {
+                                    (*old_entry.get_tail_ptr().unwrap())
+                                        .set_head_ptr(old_entry.get_head_ptr());
+                                    (*old_entry.get_head_ptr().unwrap())
+                                        .set_tail_ptr(old_entry.get_tail_ptr());
+                                    (*self._head.unwrap())
+                                        .set_head_ptr(Some(just_inserted));
+                                }
+                                self._head = Some(just_inserted);
+                                return InsertResult::OldEntry(old_entry);
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
-    pub fn clear(&mut self) {
+    pub fn clear_shared(&mut self) {
         self._head = None;
         self._tail = None;
     }
-    pub fn remove(
-        &mut self,
-        hmap: &mut ::std::collections::HashMap<K, user::Entry<K, V, U>, HB>,
-        key: &K,
-    ) -> Option<V> {
-        match hmap.remove(key) {
-            None => None,
-            Some(node) => {
-                if None == node.ll_head {
+    pub fn remove_shared(&mut self, entry: &mut E) {
+        if None == entry.get_head_ptr() {
+            // we removed the head
+            match entry.get_tail_ptr() {
+                None => {
+                    // None == entry.head
+                    // None == entry.tail
+                    // we had only one element, we removed it
+                    self._head = None;
+                    self._tail = None;
+                }
+                Some(entry_tail) => {
+                    // None == entry.head
+                    // Some(_) == entry.tail
                     // we removed the head
-                    match node.ll_tail {
-                        None => {
-                            // None == node.ll_head
-                            // None == node.ll_tail
-                            // we had only one element, we removed it
-                            self._head = None;
-                            self._tail = None;
-                        }
-                        Some(node_tail) => {
-                            // None == node.ll_head
-                            // Some(_) == node.ll_tail
-                            // we removed the head
-                            unsafe {
-                                (*node_tail).ll_head = None;
-                            }
-                            self._head = Some(node_tail);
-                        }
+                    unsafe {
+                        (*entry_tail).set_head_ptr(None);
                     }
-                } else {
-                    match node.ll_tail {
-                        None => {
-                            // Some(_) == node.ll_head
-                            // None == node.ll_tail
-                            // we removed the tail
-                            unsafe {
-                                (*node.ll_head.unwrap()).ll_tail = None;
-                            }
-                            self._tail = node.ll_head;
-                        }
-                        Some(node_tail) => {
-                            // Some(_) == node.ll_head
-                            // Some(_) == node.ll_tail
-                            // we removed an intermediate node
-                            unsafe {
-                                (*node.ll_head.unwrap()).ll_tail = node.ll_tail;
-                                (*node_tail).ll_head = node.ll_head;
-                            }
-                        }
+                    self._head = Some(entry_tail);
+                }
+            }
+        } else {
+            match entry.get_tail_ptr() {
+                None => {
+                    // Some(_) == entry.head
+                    // None == entry.tail
+                    // we removed the tail
+                    unsafe {
+                        (*entry.get_head_ptr().unwrap()).set_tail_ptr(None);
+                    }
+                    self._tail = entry.get_head_ptr();
+                }
+                Some(entry_tail) => {
+                    // Some(_) == entry.head
+                    // Some(_) == entry.tail
+                    // we removed an intermediate entry
+                    unsafe {
+                        (*entry_tail).set_head_ptr(entry.get_head_ptr());
+                        (*entry.get_head_ptr().unwrap())
+                            .set_tail_ptr(entry.get_tail_ptr());
                     }
                 }
-                Some(node.val)
             }
         }
     }
-    pub fn contains_key(
-        &self,
-        hmap: &::std::collections::HashMap<K, user::Entry<K, V, U>, HB>,
-        key: &K,
-    ) -> bool {
-        hmap.contains_key(key)
-    }
-    /// make a key head, while chaning the contents of its value
-    /// Returns the value if the key is not present
-    pub fn make_head(
-        &mut self,
-        hmap: &mut ::std::collections::HashMap<K, user::Entry<K, V, U>, HB>,
-        key: &K,
-        val: V,
-    ) -> Option<V> {
-        // A tiny bit quicker than insert
-        match hmap.get_mut(&key) {
-            None => Some(val),
-            Some(entry) => {
-                entry.val = val;
-                match entry.ll_head {
+    /// make the key the head of the LRU.
+    pub fn make_head(&mut self, entry: &mut E) {
+        match entry.get_head_ptr() {
+            None => {
+                // already the head, nothing to do
+            }
+            Some(entry_head) => {
+                unsafe {
+                    (*entry_head).set_tail_ptr(entry.get_tail_ptr());
+                }
+                match entry.get_tail_ptr() {
                     None => {
-                        // already the head, nothing to do
-                    }
-                    Some(entry_head) => {
+                        // we moved the tail to the head.
                         unsafe {
-                            (*entry_head).ll_tail = entry.ll_tail;
+                            (*self._head.unwrap()).set_head_ptr(Some(entry));
+                            entry.set_tail_ptr(self._head);
                         }
-                        match entry.ll_tail {
-                            None => {
-                                // we moved the tail to the head.
-                                unsafe {
-                                    (*self._head.unwrap()).ll_head =
-                                        Some(entry);
-                                    (*entry).ll_tail = self._head;
-                                }
-                                self._head = Some(entry);
-                                self._tail = Some(entry_head);
-                            }
-                            Some(entry_tail) => {
-                                // we promoted to head something in the middle
-                                // of the linked list
-                                unsafe {
-                                    (*entry_tail).ll_head = Some(entry_head);
-                                    (*entry_head).ll_tail = Some(entry_tail);
-                                    (*self._head.unwrap()).ll_head =
-                                        Some(entry);
-                                }
-                                self._head = Some(entry);
-                            }
+                        self._head = Some(entry);
+                        self._tail = Some(entry_head);
+                    }
+                    Some(entry_tail) => {
+                        // we promoted to head something in the middle
+                        // of the linked list
+                        unsafe {
+                            (*entry_tail).set_head_ptr(Some(entry_head));
+                            (*entry_head).set_tail_ptr(Some(entry_tail));
+                            (*self._head.unwrap()).set_head_ptr(Some(entry));
                         }
+                        self._head = Some(entry);
                     }
                 }
-                None
-            }
-        }
-    }
-    pub fn get<'a>(
-        &mut self,
-        hmap: &'a mut HashMap<K, user::Entry<K, V, U>, HB>,
-        key: &K,
-    ) -> Option<(&'a V, &'a U)> {
-        match hmap.get_mut(key) {
-            None => None,
-            Some(entry) => {
-                entry.user_data.on_get(&mut entry.val);
-                Some((&entry.val, &entry.user_data))
-            }
-        }
-    }
-    pub fn get_mut<'a>(
-        &mut self,
-        hmap: &'a mut HashMap<K, user::Entry<K, V, U>, HB>,
-        key: &K,
-    ) -> Option<(&'a mut V, &'a mut U)> {
-        match hmap.get_mut(key) {
-            None => None,
-            Some(entry) => {
-                entry.user_data.on_get(&mut entry.val);
-                Some((&mut entry.val, &mut entry.user_data))
             }
         }
     }
