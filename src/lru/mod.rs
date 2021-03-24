@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use crate::results::InsertResult;
+use crate::results::{InsertResult, InsertResultShared};
 use crate::user;
 use crate::user::EntryT;
 use ::std::collections::HashMap;
@@ -98,13 +98,17 @@ impl<
             ._lru
             .insert_shared(&mut self._hmap, maybe_old_entry, &key)
         {
-            InsertResult::Success => InsertResult::Success,
-            InsertResult::OldTail(tail) => {
+            InsertResultShared::OldEntry(e) => {
+                InsertResult::OldEntry(e.deconstruct())
+            }
+            InsertResultShared::OldTail(tail) => {
                 InsertResult::OldTail(tail.deconstruct())
             }
-            InsertResult::OldEntry(entry) => {
-                InsertResult::OldEntry(entry.deconstruct())
+            InsertResultShared::OldTailKey(tailkey) => {
+                let removed = self._hmap.remove(&tailkey).unwrap();
+                InsertResult::OldTail(removed.deconstruct())
             }
+            InsertResultShared::Success => InsertResult::Success,
         }
     }
     pub fn clear(&mut self) {
@@ -206,7 +210,7 @@ impl<
         hmap: &mut ::std::collections::HashMap<K, E, HB>,
         maybe_old_entry: Option<E>,
         key: &K,
-    ) -> InsertResult<E> {
+    ) -> InsertResultShared<E, K> {
         let just_inserted = hmap.get_mut(&key).unwrap();
         self._used += 1;
 
@@ -222,15 +226,17 @@ impl<
                             .set_head_ptr(Some(just_inserted));
                     }
                     self._head = Some(just_inserted);
-                    let removed = hmap
-                        .remove(unsafe { (*self._tail.unwrap()).get_key() })
-                        .unwrap();
+                    let to_remove = self._tail.unwrap();
+                    //                        .unsafe {
+                    // (*self._tail.unwrap()).get_key() })
                     unsafe {
-                        let rm_tail_head = removed.get_head_ptr().unwrap();
+                        let rm_tail_head = (*to_remove).get_head_ptr().unwrap();
                         (*rm_tail_head).set_tail_ptr(None);
                         self._tail = Some(rm_tail_head);
+                        return InsertResultShared::OldTailKey(
+                            (*to_remove).get_key().clone(),
+                        );
                     }
-                    return InsertResult::OldTail(removed);
                 }
                 match self._head {
                     None => {
@@ -246,7 +252,7 @@ impl<
                         self._head = Some(just_inserted);
                     }
                 }
-                return InsertResult::Success;
+                return InsertResultShared::Success;
             }
             Some(mut old_entry) => {
                 // the callee has added an element to the hashmap, but it
@@ -283,7 +289,7 @@ impl<
                             }
                         }
                         self._head = Some(just_inserted);
-                        return InsertResult::OldEntry(old_entry);
+                        return InsertResultShared::OldEntry(old_entry);
                     }
                     Some(old_entry_head) => {
                         match old_entry.get_tail_ptr() {
@@ -299,7 +305,7 @@ impl<
                                 }
                                 self._head = Some(just_inserted);
                                 self._tail = Some(old_entry_head);
-                                return InsertResult::OldTail(old_entry);
+                                return InsertResultShared::OldTail(old_entry);
                             }
                             Some(old_entry_tail) => {
                                 // Some(_) == old_entry.head
@@ -314,7 +320,7 @@ impl<
                                         .set_head_ptr(Some(just_inserted));
                                 }
                                 self._head = Some(just_inserted);
-                                return InsertResult::OldEntry(old_entry);
+                                return InsertResultShared::OldEntry(old_entry);
                             }
                         }
                     }
