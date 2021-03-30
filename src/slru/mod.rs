@@ -22,6 +22,7 @@ use crate::user;
 ///  * probation LRU: for items that have been just added
 ///  * protected LRU: items that were in the probation LRU and received a HIT
 /// W-TinyLRU specifies an 20-80 split, with 80% for the probation LRU
+/*
 pub struct SLRU<K, V, U, HB>
 where
     U: user::Meta<V>,
@@ -72,13 +73,19 @@ impl<
         self._slru.get_mut(&mut self._hmap, key)
     }
 }
-
+*/
+pub struct LRUShared<E, K, V, Cid, Umeta, HB>
+where
+    E: user::EntryT<K, V, Cid, Umeta>,
+    V: Sized,
+    Cid: Eq,
+    Umeta: user::Meta<V>, {}
 pub struct SLRUShared<K, V, U, HB>
 where
     U: user::Meta<V>,
 {
-    _probation: crate::lru::LRUShared<K, V, U, HB>,
-    _protected: crate::lru::LRUShared<K, V, U, HB>,
+    _probation: crate::lru::LRUShared<E, K, V, Cid, Umeta, HB>,
+    _protected: crate::lru::LRUShared<E, K, V, Cid, Umeta, HB>,
 }
 
 impl<

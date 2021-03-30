@@ -54,7 +54,7 @@ impl<V> Meta<V> for ZeroMeta {
     }
     fn on_get(&mut self, _val: &mut V) {}
 }
-
+/*
 pub struct Entry<K, V, U>
 where
     U: Meta<V>,
@@ -67,7 +67,7 @@ where
     pub val: V,
     pub user_data: U,
 }
-
+*/
 // TODO: make 'head' and 'tail' typesafe.
 // Does this require a full reimplementation of all pointer operations?
 pub trait EntryT<K, V, Cid, Umeta>
@@ -105,7 +105,7 @@ where
     fn user_on_insert(&mut self, old_entry: Option<&mut Self>);
 }
 
-pub struct Etry<K, V, Cid, Umeta>
+pub struct Entry<K, V, Cid, Umeta>
 where
     Umeta: Meta<V>,
 {
@@ -119,7 +119,7 @@ where
     user_data: Umeta,
 }
 impl<K, V, Cid, Umeta: Meta<V>> EntryT<K, V, Cid, Umeta>
-    for Etry<K, V, Cid, Umeta>
+    for Entry<K, V, Cid, Umeta>
 {
     fn new_entry(
         head: Option<*mut Self>,
@@ -129,7 +129,7 @@ impl<K, V, Cid, Umeta: Meta<V>> EntryT<K, V, Cid, Umeta>
         cache_id: Cid,
         user_data: Umeta,
     ) -> Self {
-        Etry {
+        Entry {
             ll_head: head,
             ll_tail: tail,
             key: key,

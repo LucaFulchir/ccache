@@ -33,11 +33,11 @@ where
 {
     _hmap: ::std::collections::HashMap<
         K,
-        user::Etry<K, V, ::std::marker::PhantomData<K>, Umeta>,
+        user::Entry<K, V, ::std::marker::PhantomData<K>, Umeta>,
         HB,
     >,
     _lru: LRUShared<
-        user::Etry<K, V, ::std::marker::PhantomData<K>, Umeta>,
+        user::Entry<K, V, ::std::marker::PhantomData<K>, Umeta>,
         K,
         V,
         ::std::marker::PhantomData<K>,
@@ -63,7 +63,7 @@ impl<
                 hash_builder,
             ),
             _lru: LRUShared::<
-                user::Etry<K, V, ::std::marker::PhantomData<K>, Umeta>,
+                user::Entry<K, V, ::std::marker::PhantomData<K>, Umeta>,
                 K,
                 V,
                 ::std::marker::PhantomData<K>,
@@ -82,7 +82,7 @@ impl<
         user_data: Umeta,
     ) -> InsertResult<(K, V, Umeta)> {
         let e =
-            user::Etry::<K, V, ::std::marker::PhantomData<K>, Umeta>::new_entry(
+            user::Entry::<K, V, ::std::marker::PhantomData<K>, Umeta>::new_entry(
                 None,
                 None,
                 key.clone(),

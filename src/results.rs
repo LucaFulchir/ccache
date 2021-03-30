@@ -9,3 +9,9 @@ pub enum InsertResult<E> {
     OldTail(E),
     Success,
 }
+pub enum InsertResultShared<E, K> {
+    OldEntry(E),
+    OldTail(E),
+    OldTailKey(K), // used by the *Shared for moving instead of removing
+    Success,
+}
