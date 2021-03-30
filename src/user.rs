@@ -94,6 +94,7 @@ where
     fn get_val(&self) -> &V;
     fn get_val_mut(&mut self) -> &mut V;
 
+    fn get_cache_id(&self) -> Cid;
     fn get_cache_id_mut(&mut self) -> &mut Cid;
     fn deconstruct(self) -> (K, V, Umeta);
 
@@ -108,6 +109,7 @@ where
 pub struct Entry<K, V, Cid, Umeta>
 where
     Umeta: Meta<V>,
+    Cid: Copy,
 {
     // linked list towards head
     ll_head: Option<*mut Self>,
@@ -120,6 +122,8 @@ where
 }
 impl<K, V, Cid, Umeta: Meta<V>> EntryT<K, V, Cid, Umeta>
     for Entry<K, V, Cid, Umeta>
+where
+    Cid: Copy,
 {
     fn new_entry(
         head: Option<*mut Self>,
@@ -159,6 +163,9 @@ impl<K, V, Cid, Umeta: Meta<V>> EntryT<K, V, Cid, Umeta>
     }
     fn get_val_mut(&mut self) -> &mut V {
         &mut self.val
+    }
+    fn get_cache_id(&self) -> Cid {
+        self.cache_id
     }
     fn get_cache_id_mut(&mut self) -> &mut Cid {
         &mut self.cache_id

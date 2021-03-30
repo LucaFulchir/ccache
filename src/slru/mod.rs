@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use crate::results::InsertResult;
+use crate::results::{InsertResult, InsertResultShared};
 use crate::user;
 
 /// SLRU ( https://en.wikipedia.org/wiki/Cache_replacement_policies#Segmented_LRU_(SLRU) )
@@ -74,106 +74,84 @@ impl<
     }
 }
 */
-pub struct LRUShared<E, K, V, Cid, Umeta, HB>
+pub struct SLRUShared<E, K, V, Cid, Umeta, HB>
 where
     E: user::EntryT<K, V, Cid, Umeta>,
     V: Sized,
-    Cid: Eq,
-    Umeta: user::Meta<V>, {}
-pub struct SLRUShared<K, V, U, HB>
-where
-    U: user::Meta<V>,
+    Cid: Eq + Copy,
+    Umeta: user::Meta<V>,
 {
     _probation: crate::lru::LRUShared<E, K, V, Cid, Umeta, HB>,
     _protected: crate::lru::LRUShared<E, K, V, Cid, Umeta, HB>,
 }
 
 impl<
+        E: user::EntryT<K, V, Cid, Umeta>,
         K: ::std::hash::Hash + Clone + Eq,
         V,
-        U: user::Meta<V>,
+        Cid: Eq + Copy,
+        Umeta: user::Meta<V>,
         HB: ::std::hash::BuildHasher,
-    > SLRUShared<K, V, U, HB>
+    > SLRUShared<E, K, V, Cid, Umeta, HB>
 {
-    pub fn new(entries: usize) -> SLRUShared<K, V, U, HB> {
-        let mut probation_entries: usize = (entries as f64 * 0.2) as usize;
-        if entries > 0 && probation_entries == 0 {
-            probation_entries = 1
-        }
+    pub fn new(
+        probation_entries: usize,
+        protected_entries: usize,
+        probation_cache_id: Cid,
+        protected_cache_id: Cid,
+    ) -> SLRUShared<E, K, V, Cid, Umeta, HB> {
         SLRUShared {
-            _probation: crate::lru::LRUShared::<K, V, U, HB>::new(
+            _probation: crate::lru::LRUShared::<E, K, V, Cid, Umeta, HB>::new(
                 probation_entries,
+                probation_cache_id,
             ),
-            _protected: crate::lru::LRUShared::<K, V, U, HB>::new(
-                entries - probation_entries,
+            _protected: crate::lru::LRUShared::<E, K, V, Cid, Umeta, HB>::new(
+                protected_entries,
+                protected_cache_id,
             ),
         }
     }
-    pub fn insert(
+    pub fn insert_shared(
         &mut self,
-        hmap: &mut ::std::collections::HashMap<K, user::Entry<K, V, U>, HB>,
-        key: K,
-        val: V,
-    ) -> InsertResult<K, V> {
-        match self._probation.remove(hmap, &key) {
-            Some(_) => {
-                // promote to protected
-                match self._protected.insert(hmap, key, val) {
-                    InsertResult::Success => InsertResult::Success,
-                    InsertResult::OldEntry(k, v) => {
-                        InsertResult::OldEntry(k, v)
-                    }
-                    InsertResult::OldTail(k, v) => {
-                        // values evicted from the protected LRU go into the
-                        // probation LRU
-                        self._probation.insert(hmap, k, v)
-                    }
+        hmap: &mut ::std::collections::HashMap<K, E, HB>,
+        maybe_old_entry: Option<E>,
+        key: &K,
+    ) -> InsertResultShared<E, K> {
+        let just_inserted = hmap.get_mut(&key).unwrap();
+        if *just_inserted.get_cache_id_mut() == self._probation.get_cache_id() {
+            self._probation.remove_shared(just_inserted);
+            // promote it to protected
+            match self._protected.insert_shared(hmap, maybe_old_entry, key) {
+                InsertResultShared::OldTailKey(oldkey) => {
+                    // out of protected, into probation
+                    self._probation.insert_shared(hmap, None, &oldkey)
+                }
+                res @ _ => {
+                    // Either there was a hash clash (returned OldEntry/OldTail)
+                    // or Succecss. any case, just return it, nothing to do
+                    res
                 }
             }
-            None => {
-                match self._protected.make_head(hmap, &key, val) {
-                    Some(value) => {
-                        // insert in probation
-                        self._probation.insert(hmap, key, value)
-                    }
-                    None => InsertResult::Success,
-                }
-            }
+        } else {
+            // put in probation
+            self._probation.insert_shared(hmap, maybe_old_entry, key)
         }
     }
-    pub fn remove(
-        &mut self,
-        hmap: &mut ::std::collections::HashMap<K, user::Entry<K, V, U>, HB>,
-        key: &K,
-    ) -> Option<V> {
-        match self._probation.remove(hmap, key) {
-            Some(val) => Some(val),
-            None => match self._protected.remove(hmap, key) {
-                Some(val) => Some(val),
-                None => None,
-            },
+    pub fn clear_shared(&mut self) {
+        self._probation.clear_shared();
+        self._protected.clear_shared();
+    }
+    pub fn remove_shared(&mut self, entry: &E) {
+        if entry.get_cache_id() == self._probation.get_cache_id() {
+            self._probation.remove_shared(entry)
+        } else {
+            self._protected.remove_shared(entry)
         }
     }
-    pub fn clear(&mut self) {
-        self._probation.clear();
-        self._protected.clear();
-    }
-    pub fn get<'a>(
-        &mut self,
-        hmap: &'a mut ::std::collections::HashMap<K, user::Entry<K, V, U>, HB>,
-        key: &K,
-    ) -> Option<(&'a V, &'a U)> {
-        // note that we share the hmap, so we don't need to check both probation
-        // and protected
-        self._probation.get(hmap, key)
-    }
-    pub fn get_mut<'a>(
-        &mut self,
-        hmap: &'a mut ::std::collections::HashMap<K, user::Entry<K, V, U>, HB>,
-        key: &K,
-    ) -> Option<(&'a mut V, &'a mut U)> {
-        // note that we share the hmap, so we don't need to check both probation
-        // and protected
-        self._probation.get_mut(hmap, key)
+    pub fn get_cache_ids(&self) -> (Cid, Cid) {
+        (
+            self._probation.get_cache_id(),
+            self._protected.get_cache_id(),
+        )
     }
 }

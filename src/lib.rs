@@ -16,6 +16,6 @@
 
 pub mod lru;
 pub mod results;
-//pub mod slru;
+pub mod slru;
 //pub mod tlfu;
 pub mod user;

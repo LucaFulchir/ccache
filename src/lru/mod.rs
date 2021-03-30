@@ -17,7 +17,6 @@
 use crate::results::{InsertResult, InsertResultShared};
 use crate::user;
 use crate::user::EntryT;
-use ::std::collections::HashMap;
 
 /// LRU implementation that wraps LRUShared
 /// note that we store the value as-is and we have pointers to those,
@@ -157,7 +156,7 @@ pub struct LRUShared<E, K, V, Cid, Umeta, HB>
 where
     E: user::EntryT<K, V, Cid, Umeta>,
     V: Sized,
-    Cid: Eq,
+    Cid: Eq + Copy,
     Umeta: user::Meta<V>,
 {
     _capacity: usize,
@@ -176,7 +175,7 @@ impl<
         E: user::EntryT<K, V, Cid, Umeta>,
         K: ::std::hash::Hash + Clone + Eq,
         V,
-        Cid: Eq,
+        Cid: Eq + Copy,
         Umeta: user::Meta<V>,
         HB: ::std::hash::BuildHasher,
     > LRUShared<E, K, V, Cid, Umeta, HB>
@@ -213,6 +212,7 @@ impl<
     ) -> InsertResultShared<E, K> {
         let just_inserted = hmap.get_mut(&key).unwrap();
         self._used += 1;
+        *just_inserted.get_cache_id_mut() = self._cache_id;
 
         match maybe_old_entry {
             None => {
@@ -227,8 +227,6 @@ impl<
                     }
                     self._head = Some(just_inserted);
                     let to_remove = self._tail.unwrap();
-                    //                        .unsafe {
-                    // (*self._tail.unwrap()).get_key() })
                     unsafe {
                         let rm_tail_head = (*to_remove).get_head_ptr().unwrap();
                         (*rm_tail_head).set_tail_ptr(None);
@@ -410,5 +408,8 @@ impl<
                 }
             }
         }
+    }
+    pub fn get_cache_id(&self) -> Cid {
+        self._cache_id
     }
 }
