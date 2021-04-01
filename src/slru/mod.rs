@@ -16,64 +16,131 @@
 
 use crate::results::{InsertResult, InsertResultShared};
 use crate::user;
+use crate::user::EntryT;
 
 /// SLRU ( https://en.wikipedia.org/wiki/Cache_replacement_policies#Segmented_LRU_(SLRU) )
 /// is a Segmented LRU it consists of two LRU:
 ///  * probation LRU: for items that have been just added
 ///  * protected LRU: items that were in the probation LRU and received a HIT
 /// W-TinyLRU specifies an 20-80 split, with 80% for the probation LRU
-/*
-pub struct SLRU<K, V, U, HB>
+pub struct SLRU<K, V, Umeta, HB>
 where
-    U: user::Meta<V>,
+    Umeta: user::Meta<V>,
 {
-    _hmap: ::std::collections::HashMap<K, user::Entry<K, V, U>, HB>,
-    _slru: SLRUShared<K, V, U, HB>,
+    _hmap:
+        ::std::collections::HashMap<K, user::Entry<K, V, SLRUCid, Umeta>, HB>,
+    _slru:
+        SLRUShared<user::Entry<K, V, SLRUCid, Umeta>, K, V, SLRUCid, Umeta, HB>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SLRUCid {
+    Probation,
+    Protected,
 }
 
 impl<
         K: ::std::hash::Hash + Clone + Eq,
         V,
-        U: user::Meta<V>,
+        Umeta: user::Meta<V>,
         HB: ::std::hash::BuildHasher,
-    > SLRU<K, V, U, HB>
+    > SLRU<K, V, Umeta, HB>
 {
     pub fn new(
-        entries: usize,
+        probation_entries: usize,
+        protected_entries: usize,
         extra_hashmap_capacity: usize,
         hash_builder: HB,
-    ) -> SLRU<K, V, U, HB> {
-        let mut probation_entries: usize = (entries as f64 * 0.2) as usize;
-        if entries > 0 && probation_entries == 0 {
-            probation_entries = 1
-        }
-        let extra_hashmap_probation: usize = extra_hashmap_capacity / 2;
+    ) -> SLRU<K, V, Umeta, HB> {
         SLRU {
             _hmap: ::std::collections::HashMap::with_capacity_and_hasher(
-                1 + entries + extra_hashmap_capacity,
+                1 + probation_entries
+                    + protected_entries
+                    + extra_hashmap_capacity,
                 hash_builder,
             ),
-            _slru: SLRUShared::<K, V, U, HB>::new(entries),
+            _slru: SLRUShared::<
+                user::Entry<K, V, SLRUCid, Umeta>,
+                K,
+                V,
+                SLRUCid,
+                Umeta,
+                HB,
+            >::new(
+                (probation_entries, SLRUCid::Probation),
+                (protected_entries, SLRUCid::Protected),
+            ),
         }
     }
-    pub fn insert(&mut self, key: K, val: V) -> InsertResult<K, V> {
-        self._slru.insert(&mut self._hmap, key, val)
+    pub fn insert(&mut self, key: K, val: V) -> InsertResult<(K, V, Umeta)> {
+        self.insert_with_meta(key, val, Umeta::new())
     }
-    pub fn remove(&mut self, key: &K) -> Option<V> {
-        self._slru.remove(&mut self._hmap, key)
+    pub fn insert_with_meta(
+        &mut self,
+        key: K,
+        val: V,
+        user_data: Umeta,
+    ) -> InsertResult<(K, V, Umeta)> {
+        let e = user::Entry::<K, V, SLRUCid, Umeta>::new_entry(
+            None,
+            None,
+            key.clone(),
+            val,
+            SLRUCid::Probation,
+            user_data,
+        );
+        // insert and get length and a ref to the value just inserted
+        // we will use this ref to fix the linked lists in ll_tail/ll_head
+        // of the various elements
+        let maybe_old_entry = self._hmap.insert(key.clone(), e);
+        match self
+            ._slru
+            .insert_shared(&mut self._hmap, maybe_old_entry, &key)
+        {
+            InsertResultShared::OldEntry(e) => {
+                InsertResult::OldEntry(e.deconstruct())
+            }
+            InsertResultShared::OldTail(tail) => {
+                InsertResult::OldTail(tail.deconstruct())
+            }
+            InsertResultShared::OldTailKey(tailkey) => {
+                let removed = self._hmap.remove(&tailkey).unwrap();
+                InsertResult::OldTail(removed.deconstruct())
+            }
+            InsertResultShared::Success => InsertResult::Success,
+        }
+    }
+
+    pub fn remove(&mut self, key: &K) -> Option<(V, Umeta)> {
+        match self._hmap.remove(key) {
+            None => None,
+            Some(entry) => {
+                self._slru.remove_shared(&entry);
+                let (_, val, meta) = entry.deconstruct();
+                Some((val, meta))
+            }
+        }
     }
     pub fn clear(&mut self) {
         self._hmap.clear();
-        self._slru.clear()
+        self._slru.clear_shared()
     }
-    pub fn get(&mut self, key: &K) -> Option<(&V, &U)> {
-        self._slru.get(&mut self._hmap, key)
+    // FIXME: we should run the 'on_get' function on the user meta
+    pub fn get(&self, key: &K) -> Option<(&V, &Umeta)> {
+        match self._hmap.get(key) {
+            None => None,
+            Some(entry) => Some((entry.get_val(), entry.get_user())),
+        }
     }
-    pub fn get_mut(&mut self, key: &K) -> Option<(&mut V, &mut U)> {
-        self._slru.get_mut(&mut self._hmap, key)
+    pub fn get_mut(&mut self, key: &K) -> Option<(&mut V, &mut Umeta)> {
+        match self._hmap.get_mut(key) {
+            None => None,
+            //Some(mut entry) => Some((entry.get_val(), entry.get_user())),
+            Some(entry) => Some(entry.get_val_user_mut()),
+        }
     }
 }
-*/
+
 pub struct SLRUShared<E, K, V, Cid, Umeta, HB>
 where
     E: user::EntryT<K, V, Cid, Umeta>,
@@ -95,19 +162,17 @@ impl<
     > SLRUShared<E, K, V, Cid, Umeta, HB>
 {
     pub fn new(
-        probation_entries: usize,
-        protected_entries: usize,
-        probation_cache_id: Cid,
-        protected_cache_id: Cid,
+        probation: (usize, Cid),
+        protected: (usize, Cid),
     ) -> SLRUShared<E, K, V, Cid, Umeta, HB> {
         SLRUShared {
             _probation: crate::lru::LRUShared::<E, K, V, Cid, Umeta, HB>::new(
-                probation_entries,
-                probation_cache_id,
+                probation.0,
+                probation.1,
             ),
             _protected: crate::lru::LRUShared::<E, K, V, Cid, Umeta, HB>::new(
-                protected_entries,
-                protected_cache_id,
+                protected.0,
+                protected.1,
             ),
         }
     }
@@ -118,7 +183,7 @@ impl<
         key: &K,
     ) -> InsertResultShared<E, K> {
         let just_inserted = hmap.get_mut(&key).unwrap();
-        if *just_inserted.get_cache_id_mut() == self._probation.get_cache_id() {
+        if just_inserted.get_cache_id() == self._probation.get_cache_id() {
             self._probation.remove_shared(just_inserted);
             // promote it to protected
             match self._protected.insert_shared(hmap, maybe_old_entry, key) {
