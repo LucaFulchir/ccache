@@ -138,6 +138,7 @@ impl<
             }
         }
     }
+    // FIXME: we should run the 'on_get' function on the user meta
     pub fn get(&self, key: &K) -> Option<(&V, &Umeta)> {
         match self._hmap.get(key) {
             None => None,
@@ -162,8 +163,8 @@ where
     _capacity: usize,
     _used: usize,
 
-    _head: Option<*mut E>,
-    _tail: Option<*mut E>,
+    _head: Option<::std::ptr::NonNull<E>>,
+    _tail: Option<::std::ptr::NonNull<E>>,
     _cache_id: Cid,
     _key: ::std::marker::PhantomData<K>,
     _val: ::std::marker::PhantomData<V>,
@@ -222,32 +223,37 @@ impl<
                 if self._used >= self._capacity {
                     // reset head & tail to correct values, returen old tail
                     unsafe {
-                        (*self._head.unwrap())
-                            .set_head_ptr(Some(just_inserted));
+                        self._head
+                            .unwrap()
+                            .as_mut()
+                            .set_head_ptr(Some(just_inserted.into()));
                     }
-                    self._head = Some(just_inserted);
-                    let to_remove = self._tail.unwrap();
+                    self._head = Some(just_inserted.into());
+                    let mut to_remove = self._tail.unwrap();
                     unsafe {
-                        let rm_tail_head = (*to_remove).get_head_ptr().unwrap();
-                        (*rm_tail_head).set_tail_ptr(None);
+                        let mut rm_tail_head =
+                            to_remove.as_mut().get_head_ptr().unwrap();
+                        rm_tail_head.as_mut().set_tail_ptr(None);
                         self._tail = Some(rm_tail_head);
                         return InsertResultShared::OldTailKey(
-                            (*to_remove).get_key().clone(),
+                            to_remove.as_mut().get_key().clone(),
                         );
                     }
                 }
                 match self._head {
                     None => {
                         // first entry in the LRU, both head and tail
-                        self._head = Some(just_inserted);
-                        self._tail = Some(just_inserted);
+                        self._head = Some(just_inserted.into());
+                        self._tail = Some(just_inserted.into());
                     }
-                    Some(old_head) => {
+                    Some(mut old_head) => {
                         // just a new entry on a non-filled LRU
                         unsafe {
-                            (*old_head).set_head_ptr(Some(just_inserted))
+                            old_head
+                                .as_mut()
+                                .set_head_ptr(Some(just_inserted.into()))
                         };
-                        self._head = Some(just_inserted);
+                        self._head = Some(just_inserted.into());
                     }
                 }
                 return InsertResultShared::Success;
@@ -274,22 +280,23 @@ impl<
                                 // None    == old_entry.tail
                                 // basically the only element in the LRU
                                 // both head and tail
-                                self._tail = Some(just_inserted);
+                                self._tail = Some(just_inserted.into());
                             }
-                            Some(old_entry_tail) => {
+                            Some(mut old_entry_tail) => {
                                 unsafe {
                                     // None    == old_entry.head
                                     // Some(_) == old_entry.tail
                                     // the head of the LRU
-                                    (*old_entry_tail)
-                                        .set_head_ptr(Some(just_inserted));
+                                    old_entry_tail.as_mut().set_head_ptr(Some(
+                                        just_inserted.into(),
+                                    ));
                                 }
                             }
                         }
-                        self._head = Some(just_inserted);
+                        self._head = Some(just_inserted.into());
                         return InsertResultShared::OldEntry(old_entry);
                     }
-                    Some(old_entry_head) => {
+                    Some(mut old_entry_head) => {
                         match old_entry.get_tail_ptr() {
                             None => {
                                 // Some(_) == old_entry.head
@@ -297,27 +304,33 @@ impl<
                                 // we removed the old tail, with a hash clash
                                 // the new tail is the prev of the old tail.
                                 unsafe {
-                                    (*old_entry_head).set_tail_ptr(None);
-                                    (*self._head.unwrap())
-                                        .set_head_ptr(Some(just_inserted));
+                                    old_entry_head.as_mut().set_tail_ptr(None);
+                                    self._head.unwrap().as_mut().set_head_ptr(
+                                        Some(just_inserted.into()),
+                                    );
                                 }
-                                self._head = Some(just_inserted);
+                                self._head = Some(just_inserted.into());
                                 self._tail = Some(old_entry_head);
                                 return InsertResultShared::OldTail(old_entry);
                             }
-                            Some(old_entry_tail) => {
+                            Some(mut old_entry_tail) => {
                                 // Some(_) == old_entry.head
                                 // Some(_) == old_entry.tail
                                 // we removed something in the middle
                                 unsafe {
-                                    (*old_entry_tail)
+                                    old_entry_tail
+                                        .as_mut()
                                         .set_head_ptr(old_entry.get_head_ptr());
-                                    (*old_entry.get_head_ptr().unwrap())
+                                    old_entry
+                                        .get_head_ptr()
+                                        .unwrap()
+                                        .as_mut()
                                         .set_tail_ptr(old_entry.get_tail_ptr());
-                                    (*self._head.unwrap())
-                                        .set_head_ptr(Some(just_inserted));
+                                    self._head.unwrap().as_mut().set_head_ptr(
+                                        Some(just_inserted.into()),
+                                    );
                                 }
-                                self._head = Some(just_inserted);
+                                self._head = Some(just_inserted.into());
                                 return InsertResultShared::OldEntry(old_entry);
                             }
                         }
@@ -341,12 +354,12 @@ impl<
                     self._head = None;
                     self._tail = None;
                 }
-                Some(entry_tail) => {
+                Some(mut entry_tail) => {
                     // None == entry.head
                     // Some(_) == entry.tail
                     // we removed the head
                     unsafe {
-                        (*entry_tail).set_head_ptr(None);
+                        entry_tail.as_mut().set_head_ptr(None);
                     }
                     self._head = Some(entry_tail);
                 }
@@ -358,17 +371,24 @@ impl<
                     // None == entry.tail
                     // we removed the tail
                     unsafe {
-                        (*entry.get_head_ptr().unwrap()).set_tail_ptr(None);
+                        entry
+                            .get_head_ptr()
+                            .unwrap()
+                            .as_mut()
+                            .set_tail_ptr(None);
                     }
                     self._tail = entry.get_head_ptr();
                 }
-                Some(entry_tail) => {
+                Some(mut entry_tail) => {
                     // Some(_) == entry.head
                     // Some(_) == entry.tail
                     // we removed an intermediate entry
                     unsafe {
-                        (*entry_tail).set_head_ptr(entry.get_head_ptr());
-                        (*entry.get_head_ptr().unwrap())
+                        entry_tail.as_mut().set_head_ptr(entry.get_head_ptr());
+                        entry
+                            .get_head_ptr()
+                            .unwrap()
+                            .as_mut()
                             .set_tail_ptr(entry.get_tail_ptr());
                     }
                 }
@@ -381,29 +401,35 @@ impl<
             None => {
                 // already the head, nothing to do
             }
-            Some(entry_head) => {
+            Some(mut entry_head) => {
                 unsafe {
-                    (*entry_head).set_tail_ptr(entry.get_tail_ptr());
+                    entry_head.as_mut().set_tail_ptr(entry.get_tail_ptr());
                 }
                 match entry.get_tail_ptr() {
                     None => {
                         // we moved the tail to the head.
                         unsafe {
-                            (*self._head.unwrap()).set_head_ptr(Some(entry));
+                            self._head
+                                .unwrap()
+                                .as_mut()
+                                .set_head_ptr(Some(entry.into()));
                             entry.set_tail_ptr(self._head);
                         }
-                        self._head = Some(entry);
+                        self._head = Some(entry.into());
                         self._tail = Some(entry_head);
                     }
-                    Some(entry_tail) => {
+                    Some(mut entry_tail) => {
                         // we promoted to head something in the middle
                         // of the linked list
                         unsafe {
-                            (*entry_tail).set_head_ptr(Some(entry_head));
-                            (*entry_head).set_tail_ptr(Some(entry_tail));
-                            (*self._head.unwrap()).set_head_ptr(Some(entry));
+                            entry_tail.as_mut().set_head_ptr(Some(entry_head));
+                            entry_head.as_mut().set_tail_ptr(Some(entry_tail));
+                            self._head
+                                .unwrap()
+                                .as_mut()
+                                .set_head_ptr(Some(entry.into()));
                         }
-                        self._head = Some(entry);
+                        self._head = Some(entry.into());
                     }
                 }
             }

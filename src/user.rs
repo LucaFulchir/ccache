@@ -54,20 +54,6 @@ impl<V> Meta<V> for ZeroMeta {
     }
     fn on_get(&mut self, _val: &mut V) {}
 }
-/*
-pub struct Entry<K, V, U>
-where
-    U: Meta<V>,
-{
-    // linked list towards head
-    pub ll_head: Option<*mut Entry<K, V, U>>,
-    // linked list towards tail
-    pub ll_tail: Option<*mut Entry<K, V, U>>,
-    pub key: K,
-    pub val: V,
-    pub user_data: U,
-}
-*/
 // TODO: make 'head' and 'tail' typesafe.
 // Does this require a full reimplementation of all pointer operations?
 pub trait EntryT<K, V, Cid, Umeta>
@@ -76,18 +62,18 @@ where
     Self: Sized,
 {
     fn new_entry(
-        head: Option<*mut Self>,
-        tail: Option<*mut Self>,
+        head: Option<::std::ptr::NonNull<Self>>,
+        tail: Option<::std::ptr::NonNull<Self>>,
         key: K,
         val: V,
         cache_id: Cid,
         user_data: Umeta,
     ) -> Self;
-    fn get_head_ptr(&self) -> Option<*mut Self>;
-    fn set_head_ptr(&mut self, head: Option<*mut Self>);
+    fn get_head_ptr(&self) -> Option<::std::ptr::NonNull<Self>>;
+    fn set_head_ptr(&mut self, head: Option<::std::ptr::NonNull<Self>>);
 
-    fn get_tail_ptr(&self) -> Option<*mut Self>;
-    fn set_tail_ptr(&mut self, tail: Option<*mut Self>);
+    fn get_tail_ptr(&self) -> Option<::std::ptr::NonNull<Self>>;
+    fn set_tail_ptr(&mut self, tail: Option<::std::ptr::NonNull<Self>>);
 
     fn get_key(&self) -> &K;
 
@@ -111,13 +97,13 @@ where
     Umeta: Meta<V>,
     Cid: Copy,
 {
+    cache_id: Cid,
     // linked list towards head
-    ll_head: Option<*mut Self>,
+    ll_head: Option<::std::ptr::NonNull<Self>>,
     // linked list towards tail
-    ll_tail: Option<*mut Self>,
+    ll_tail: Option<::std::ptr::NonNull<Self>>,
     key: K,
     val: V,
-    cache_id: Cid,
     user_data: Umeta,
 }
 impl<K, V, Cid, Umeta: Meta<V>> EntryT<K, V, Cid, Umeta>
@@ -126,8 +112,8 @@ where
     Cid: Copy,
 {
     fn new_entry(
-        head: Option<*mut Self>,
-        tail: Option<*mut Self>,
+        head: Option<::std::ptr::NonNull<Self>>,
+        tail: Option<::std::ptr::NonNull<Self>>,
         key: K,
         val: V,
         cache_id: Cid,
@@ -142,16 +128,16 @@ where
             user_data: user_data,
         }
     }
-    fn get_head_ptr(&self) -> Option<*mut Self> {
+    fn get_head_ptr(&self) -> Option<::std::ptr::NonNull<Self>> {
         self.ll_head
     }
-    fn set_head_ptr(&mut self, head: Option<*mut Self>) {
+    fn set_head_ptr(&mut self, head: Option<::std::ptr::NonNull<Self>>) {
         self.ll_head = head;
     }
-    fn get_tail_ptr(&self) -> Option<*mut Self> {
+    fn get_tail_ptr(&self) -> Option<::std::ptr::NonNull<Self>> {
         self.ll_tail
     }
-    fn set_tail_ptr(&mut self, tail: Option<*mut Self>) {
+    fn set_tail_ptr(&mut self, tail: Option<::std::ptr::NonNull<Self>>) {
         self.ll_tail = tail;
     }
     fn get_key(&self) -> &K {
