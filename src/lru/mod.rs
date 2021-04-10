@@ -25,22 +25,23 @@ use crate::user::EntryT;
 // TODO: generalize: K in the first Hashmap template parameter is not
 // necessarily the same K in the user::Entry<K>
 // (e.g: could be a pointer to user::Entry<K>.key)
+type LRUEntry<K, V, Umeta> =
+    user::Entry<K, V, ::std::marker::PhantomData<K>, Umeta>;
 pub struct LRU<K, V, Umeta, HB>
 where
     V: Sized,
     Umeta: user::Meta<V>,
 {
-    _hmap: ::std::collections::HashMap<
-        K,
-        user::Entry<K, V, ::std::marker::PhantomData<K>, Umeta>,
-        HB,
-    >,
+    _hmap: ::std::collections::HashMap<K, LRUEntry<K, V, Umeta>, HB>,
     _lru: LRUShared<
-        user::Entry<K, V, ::std::marker::PhantomData<K>, Umeta>,
+        LRUEntry<K, V, Umeta>,
         K,
         V,
         ::std::marker::PhantomData<K>,
         Umeta,
+        fn(
+            ::std::ptr::NonNull<LRUEntry<K, V, Umeta>>,
+        ) -> Option<::std::ptr::NonNull<LRUEntry<K, V, Umeta>>>,
         HB,
     >,
 }
@@ -62,13 +63,27 @@ impl<
                 hash_builder,
             ),
             _lru: LRUShared::<
-                user::Entry<K, V, ::std::marker::PhantomData<K>, Umeta>,
+                LRUEntry<K, V, Umeta>,
                 K,
                 V,
                 ::std::marker::PhantomData<K>,
                 Umeta,
+                fn(
+                    ::std::ptr::NonNull<LRUEntry<K, V, Umeta>>,
+                )
+                    -> Option<::std::ptr::NonNull<LRUEntry<K, V, Umeta>>>,
                 HB,
-            >::new(entries, ::std::marker::PhantomData),
+            >::new(
+                entries,
+                ::std::marker::PhantomData,
+                crate::scan::null_scan::<
+                    LRUEntry<K, V, Umeta>,
+                    K,
+                    V,
+                    ::std::marker::PhantomData<K>,
+                    Umeta,
+                >,
+            ),
         }
     }
     pub fn insert(&mut self, key: K, val: V) -> InsertResult<(K, V, Umeta)> {
@@ -153,11 +168,12 @@ impl<
         }
     }
 }
-pub struct LRUShared<E, K, V, Cid, Umeta, HB>
+pub struct LRUShared<E, K, V, Cid, Umeta, Fscan: Sized, HB>
 where
     E: user::EntryT<K, V, Cid, Umeta>,
     V: Sized,
     Cid: Eq + Copy,
+    Fscan: FnMut(::std::ptr::NonNull<E>) -> Option<::std::ptr::NonNull<E>>,
     Umeta: user::Meta<V>,
 {
     _capacity: usize,
@@ -170,6 +186,7 @@ where
     _val: ::std::marker::PhantomData<V>,
     _meta: ::std::marker::PhantomData<Umeta>,
     _hashbuilder: ::std::marker::PhantomData<HB>,
+    _scan: crate::scan::Scan<E, Fscan>,
 }
 
 impl<
@@ -178,8 +195,9 @@ impl<
         V,
         Cid: Eq + Copy,
         Umeta: user::Meta<V>,
+        Fscan: FnMut(::std::ptr::NonNull<E>) -> Option<::std::ptr::NonNull<E>>,
         HB: ::std::hash::BuildHasher,
-    > LRUShared<E, K, V, Cid, Umeta, HB>
+    > LRUShared<E, K, V, Cid, Umeta, Fscan, HB>
 {
     /// Build a LRU that works on someone else's hasmap
     /// In this case each cache should have a different `Cid` (Cache ID) so that
@@ -188,7 +206,8 @@ impl<
     pub fn new(
         entries: usize,
         cache_id: Cid,
-    ) -> LRUShared<E, K, V, Cid, Umeta, HB> {
+        access_scan: Fscan,
+    ) -> LRUShared<E, K, V, Cid, Umeta, Fscan, HB> {
         LRUShared {
             _capacity: entries,
             _used: 0,
@@ -199,6 +218,10 @@ impl<
             _val: ::std::marker::PhantomData,
             _meta: ::std::marker::PhantomData,
             _hashbuilder: std::marker::PhantomData,
+            _scan: crate::scan::Scan {
+                last: None,
+                f: access_scan,
+            },
         }
     }
     /// `insert_shared` does not actually insert anything. It will only fix
@@ -214,6 +237,7 @@ impl<
         let just_inserted = hmap.get_mut(&key).unwrap();
         self._used += 1;
         *just_inserted.get_cache_id_mut() = self._cache_id;
+        (self._scan.f)(just_inserted.into());
 
         match maybe_old_entry {
             None => {

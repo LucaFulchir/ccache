@@ -120,11 +120,11 @@ where
         user_data: Umeta,
     ) -> Self {
         Entry {
+            cache_id: cache_id,
             ll_head: head,
             ll_tail: tail,
             key: key,
             val: val,
-            cache_id: cache_id,
             user_data: user_data,
         }
     }

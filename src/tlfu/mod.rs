@@ -45,37 +45,93 @@ use bitvec::prelude::*;
 /// * every time we access the counters, we check their generation. if it is
 ///   higher than the current, we halve as many times as necessary
 
+/// TLFU will store the frequency in the cache id.
+/// We do this since:
+///  * we use a share hashmap so that we don't have to move elements from one
+///    hashmap to the other
+///  * a cache id is needed to to the previous point, otherwise we would not
+///    know to chich cache an element belongs to
+///  This means that we are already wasting bytes in memory.
+///  We will put those bytes to use by storing the frequency of each element
+///  together with the Cid
+/// This way we don't even need the bloom filter
+pub trait Freq {
+    fn add(&mut self);
+    fn halve(&mut self);
+    fn clear(&mut self);
+}
+
 // FIXME: make the generation counter a 0/1, then keep a pointer to the
 // last-reset counter. each access will check and halve just one more element
 // this will mean that after `W` operations we have halved the whole counters
 // and don't need to keep all generations
-pub struct TLFUShared<K, V, U, HB>
+pub struct TLFUShared<E, K, V, Cid, Umeta, HB>
 where
-    U: user::Meta<V>,
+    E: user::EntryT<K, V, Cid, Umeta>,
+    V: Sized,
+    Cid: Eq + Copy + Freq,
+    Umeta: user::Meta<V>,
+    HB: ::std::hash::BuildHasher,
 {
-    _capacity: usize,
     _reset_counters: counter::Full,
     _doorkeeper: ::bitvec::vec::BitVec<Msb0, u64>,
     _counters: ::std::vec::Vec<counter::Full>,
-    _slru: crate::slru::SLRUShared<K, V, U, HB>,
+    _slru: crate::slru::SLRUShared<E, K, V, Cid, Umeta, HB>,
 }
 
 impl<
+        E: user::EntryT<K, V, Cid, Umeta>,
         K: ::std::hash::Hash + Clone + Eq,
         V,
-        U: user::Meta<V>,
+        Cid: Eq + Copy + Freq,
+        Umeta: user::Meta<V>,
         HB: ::std::hash::BuildHasher,
-    > TLFUShared<K, V, U, HB>
+    > TLFUShared<E, K, V, Cid, Umeta, HB>
 {
-    pub fn new(entries: usize) -> TLFUShared<K, V, U, HB> {
+    pub fn new(
+        entries: usize,
+        cids: [Cid; 2],
+    ) -> TLFUShared<E, K, V, Cid, Umeta, HB> {
+        let (probation_entries, protected_entries) =
+            match ((entries as f64) * 0.2) as usize {
+                0 => {
+                    if entries == 0 {
+                        (0, 0)
+                    } else {
+                        (1, entries - 1)
+                    }
+                }
+                x @ _ => (x, entries - x),
+            };
+
         TLFUShared {
-            _capacity: entries,
             _reset_counters: counter::Full::new(),
             _doorkeeper: ::bitvec::vec::BitVec::<Msb0, u64>::with_capacity(
                 entries,
             ),
             _counters: ::std::vec::Vec::<counter::Full>::with_capacity(entries),
-            _slru: crate::slru::SLRUShared::<K, V, U, HB>::new(entries),
+            _slru: crate::slru::SLRUShared::<E, K, V, Cid, Umeta, HB>::new(
+                (probation_entries, cids[0]),
+                (protected_entries, cids[1]),
+            ),
         }
     }
+    /*
+    pub fn insert_shared(
+        &mut self,
+        hmap: &mut ::std::collections::HashMap<K, E, HB>,
+        maybe_old_entry: Option<E>,
+        key: &K,
+    ) -> InsertResultShared<E, K> {
+        let just_inserted = hmap.get_mut(&key).unwrap();
+        *just_inserted.get_cache_id_mut() = self._cache_id;
+
+        match maybe_old_entry {
+            None => {
+                just_inserted.user_on_insert(None);
+            }
+            Some(old_entry) => {}
+        }
+    }
+    */
 }
