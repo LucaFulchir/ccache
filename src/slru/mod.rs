@@ -14,9 +14,45 @@
  * limitations under the License.
  */
 
+use bitvec::access;
+
 use crate::results::{InsertResult, InsertResultShared};
 use crate::user;
 use crate::user::EntryT;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct SLRUCidNone {}
+impl Default for SLRUCidNone {
+    fn default() -> Self {
+        SLRUCidNone {}
+    }
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct SLRUCidProbation {}
+impl Default for SLRUCidProbation {
+    fn default() -> Self {
+        SLRUCidProbation {}
+    }
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct SLRUCidProtected {}
+impl Default for SLRUCidProtected {
+    fn default() -> Self {
+        SLRUCidProtected {}
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SLRUCid {
+    None(SLRUCidNone),
+    Probation(SLRUCidProbation),
+    Protected(SLRUCidProtected),
+}
+impl Default for SLRUCid {
+    fn default() -> Self {
+        SLRUCid::None(SLRUCidNone::default())
+    }
+}
 
 /// SLRU ( https://en.wikipedia.org/wiki/Cache_replacement_policies#Segmented_LRU_(SLRU) )
 /// is a Segmented LRU it consists of two LRU:
@@ -29,14 +65,15 @@ where
 {
     _hmap:
         ::std::collections::HashMap<K, user::Entry<K, V, SLRUCid, Umeta>, HB>,
-    _slru:
-        SLRUShared<user::Entry<K, V, SLRUCid, Umeta>, K, V, SLRUCid, Umeta, HB>,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum SLRUCid {
-    Probation,
-    Protected,
+    _slru: SLRUShared<
+        user::Entry<K, V, SLRUCid, Umeta>,
+        K,
+        V,
+        SLRUCid,
+        Umeta,
+        fn(::std::ptr::NonNull<user::Entry<K, V, SLRUCid, Umeta>>),
+        HB,
+    >,
 }
 
 impl<
@@ -65,10 +102,24 @@ impl<
                 V,
                 SLRUCid,
                 Umeta,
+                fn(::std::ptr::NonNull<user::Entry<K, V, SLRUCid, Umeta>>),
                 HB,
             >::new(
-                (probation_entries, SLRUCid::Probation),
-                (protected_entries, SLRUCid::Protected),
+                (
+                    probation_entries,
+                    SLRUCid::Probation(SLRUCidProbation::default()),
+                ),
+                (
+                    protected_entries,
+                    SLRUCid::Protected(SLRUCidProtected::default()),
+                ),
+                crate::scan::null_scan::<
+                    user::Entry<K, V, SLRUCid, Umeta>,
+                    K,
+                    V,
+                    SLRUCid,
+                    Umeta,
+                >,
             ),
         }
     }
@@ -86,7 +137,7 @@ impl<
             None,
             key.clone(),
             val,
-            SLRUCid::Probation,
+            SLRUCid::default(),
             user_data,
         );
         // insert and get length and a ref to the value just inserted
@@ -125,55 +176,65 @@ impl<
         self._hmap.clear();
         self._slru.clear_shared()
     }
-    // FIXME: we should run the 'on_get' function on the user meta
-    pub fn get(&self, key: &K) -> Option<(&V, &Umeta)> {
-        match self._hmap.get(key) {
+    pub fn get(&mut self, key: &K) -> Option<(&V, &Umeta)> {
+        match self._hmap.get_mut(key) {
             None => None,
-            Some(entry) => Some((entry.get_val(), entry.get_user())),
+            Some(entry) => {
+                entry.user_on_get();
+                Some((entry.get_val(), entry.get_user()))
+            }
         }
     }
     pub fn get_mut(&mut self, key: &K) -> Option<(&mut V, &mut Umeta)> {
         match self._hmap.get_mut(key) {
             None => None,
-            //Some(mut entry) => Some((entry.get_val(), entry.get_user())),
-            Some(entry) => Some(entry.get_val_user_mut()),
+            Some(entry) => {
+                entry.user_on_get();
+                Some(entry.get_val_user_mut())
+            }
         }
     }
 }
-
-pub struct SLRUShared<E, K, V, Cid, Umeta, HB>
+pub struct SLRUShared<E, K, V, Cid, Umeta, Fscan, HB>
 where
     E: user::EntryT<K, V, Cid, Umeta>,
     V: Sized,
-    Cid: Eq + Copy,
+    Cid: Eq + Copy + Default,
     Umeta: user::Meta<V>,
+    Fscan: Sized + Fn(::std::ptr::NonNull<E>),
 {
-    _probation: crate::lru::LRUShared<E, K, V, Cid, Umeta, HB>,
-    _protected: crate::lru::LRUShared<E, K, V, Cid, Umeta, HB>,
+    _probation: crate::lru::LRUShared<E, K, V, Cid, Umeta, Fscan, HB>,
+    _protected: crate::lru::LRUShared<E, K, V, Cid, Umeta, Fscan, HB>,
 }
 
 impl<
         E: user::EntryT<K, V, Cid, Umeta>,
         K: ::std::hash::Hash + Clone + Eq,
         V,
-        Cid: Eq + Copy,
+        Cid: Eq + Copy + Default,
         Umeta: user::Meta<V>,
+        Fscan: Sized + Fn(::std::ptr::NonNull<E>) + Copy,
         HB: ::std::hash::BuildHasher,
-    > SLRUShared<E, K, V, Cid, Umeta, HB>
+    > SLRUShared<E, K, V, Cid, Umeta, Fscan, HB>
 {
     pub fn new(
         probation: (usize, Cid),
         protected: (usize, Cid),
-    ) -> SLRUShared<E, K, V, Cid, Umeta, HB> {
+        access_scan: Fscan,
+    ) -> SLRUShared<E, K, V, Cid, Umeta, Fscan, HB> {
         SLRUShared {
-            _probation: crate::lru::LRUShared::<E, K, V, Cid, Umeta, HB>::new(
-                probation.0,
-                probation.1,
-            ),
-            _protected: crate::lru::LRUShared::<E, K, V, Cid, Umeta, HB>::new(
-                protected.0,
-                protected.1,
-            ),
+            _probation:
+                crate::lru::LRUShared::<E, K, V, Cid, Umeta, Fscan, HB>::new(
+                    probation.0,
+                    probation.1,
+                    access_scan.clone(),
+                ),
+            _protected:
+                crate::lru::LRUShared::<E, K, V, Cid, Umeta, Fscan, HB>::new(
+                    protected.0,
+                    protected.1,
+                    access_scan,
+                ),
         }
     }
     pub fn insert_shared(
@@ -184,22 +245,46 @@ impl<
     ) -> InsertResultShared<E, K> {
         let just_inserted = hmap.get_mut(&key).unwrap();
         if just_inserted.get_cache_id() == self._probation.get_cache_id() {
+            // inserted twice. promote to protected
+            // Note that since we already found the key, we can not have had any
+            // clash (maybe_old_entry == None)
             self._probation.remove_shared(just_inserted);
-            // promote it to protected
-            match self._protected.insert_shared(hmap, maybe_old_entry, key) {
-                InsertResultShared::OldTailKey(oldkey) => {
-                    // out of protected, into probation
-                    self._probation.insert_shared(hmap, None, &oldkey)
-                }
-                res @ _ => {
-                    // Either there was a hash clash (returned OldEntry/OldTail)
-                    // or Succecss. any case, just return it, nothing to do
-                    res
+            self._protected.insert_shared(hmap, None, key)
+        } else if just_inserted.get_cache_id() == self._protected.get_cache_id()
+        {
+            // inserted more than once, in protected
+            // Note that since we already found the key, we can not have had any
+            // clash (maybe_old_entry == None)
+            self._protected.insert_shared(hmap, None, key)
+        } else {
+            // new insert, not in any cache.
+            // We might have had a clash, but we will insert into probation
+            match maybe_old_entry {
+                None => self._probation.insert_shared(hmap, None, key),
+                Some(old_entry) => {
+                    // old_entry might be either in probation or protected.
+                    // But the only way for us to have an "old_entry" instead of
+                    // None is to have generated a clash on insert.
+                    // This means that "just_inserted" is a new key, not an old
+                    // one, or we would not have had the clash.
+                    if old_entry.get_cache_id()
+                        == self._probation.get_cache_id()
+                    {
+                        // old_entry in probation.
+                        self._probation.insert_shared(
+                            hmap,
+                            Some(old_entry),
+                            key,
+                        )
+                    } else {
+                        // old_entry in protected
+                        // FIXME: we won't alert the user of the removal of
+                        //   old_entry!
+                        self._protected.remove_shared(&old_entry.into());
+                        self._probation.insert_shared(hmap, None, key)
+                    }
                 }
             }
-        } else {
-            // put in probation
-            self._probation.insert_shared(hmap, maybe_old_entry, key)
         }
     }
     pub fn clear_shared(&mut self) {

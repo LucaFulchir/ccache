@@ -168,12 +168,12 @@ impl<
         }
     }
 }
-pub struct LRUShared<E, K, V, Cid, Umeta, Fscan: Sized, HB>
+pub struct LRUShared<E, K, V, Cid, Umeta, Fscan, HB>
 where
     E: user::EntryT<K, V, Cid, Umeta>,
     V: Sized,
     Cid: Eq + Copy,
-    Fscan: Fn(::std::ptr::NonNull<E>),
+    Fscan: Sized + Fn(::std::ptr::NonNull<E>),
     Umeta: user::Meta<V>,
 {
     _capacity: usize,

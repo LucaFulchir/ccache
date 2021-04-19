@@ -9,6 +9,11 @@ pub enum InsertResult<E> {
     OldTail(E),
     Success,
 }
+// FIXME: case missing:
+// we can have both a clash (oldkey) and a tail eviction of different keys
+// reason: take SLRU, the insert generates a clash with the protected lru,
+// but the new entry always goes into the probation LRU, which can generate a
+// OldTail
 pub enum InsertResultShared<E, K> {
     OldEntry(E),
     OldTail(E),
