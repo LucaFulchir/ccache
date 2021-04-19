@@ -151,8 +151,8 @@ impl<
     pub fn get(&mut self, key: &K) -> Option<(&V, &Umeta)> {
         match self._hmap.get_mut(key) {
             None => None,
-            Some(entry) => {
-                entry.user_on_get();
+            Some(mut entry) => {
+                self._lru.on_get(&mut entry);
                 Some((entry.get_val(), entry.get_user()))
             }
         }
@@ -161,8 +161,8 @@ impl<
         match self._hmap.get_mut(key) {
             None => None,
             //Some(mut entry) => Some((entry.get_val(), entry.get_user())),
-            Some(entry) => {
-                entry.user_on_get();
+            Some(mut entry) => {
+                self._lru.on_get(&mut entry);
                 Some(entry.get_val_user_mut())
             }
         }
@@ -372,6 +372,7 @@ impl<
     pub fn clear_shared(&mut self) {
         self._head = None;
         self._tail = None;
+        self._scan.stop();
     }
     pub fn remove_shared(&mut self, entry: &E) {
         self._scan.check_and_next(entry.into());
@@ -469,5 +470,21 @@ impl<
     }
     pub fn get_cache_id(&self) -> Cid {
         self._cache_id
+    }
+    pub fn on_get(&mut self, entry: &mut E) {
+        entry.user_on_get();
+        self._scan.apply_next();
+    }
+    pub fn start_scan(&mut self) {
+        match self._scan.is_running() {
+            false => match self._head {
+                Some(head) => self._scan.start_scan(head),
+                None => {}
+            },
+            true => {}
+        }
+    }
+    pub fn is_scan_running(&self) -> bool {
+        self._scan.is_running()
     }
 }

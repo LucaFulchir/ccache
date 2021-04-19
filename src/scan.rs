@@ -50,6 +50,16 @@ impl<
             _umeta: ::std::marker::PhantomData,
         }
     }
+    pub fn is_running(&self) -> bool {
+        self.last != None
+    }
+    pub fn start_scan(&mut self, entry: ::std::ptr::NonNull<E>) {
+        (self.f)(entry);
+        self.last = Some(entry);
+    }
+    pub fn stop(&mut self) {
+        self.last = None;
+    }
     pub fn apply_raw(&self, entry: ::std::ptr::NonNull<E>) {
         (self.f)(entry);
     }

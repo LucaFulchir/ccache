@@ -180,7 +180,7 @@ impl<
         match self._hmap.get_mut(key) {
             None => None,
             Some(entry) => {
-                entry.user_on_get();
+                self._slru.on_get(entry);
                 Some((entry.get_val(), entry.get_user()))
             }
         }
@@ -189,11 +189,17 @@ impl<
         match self._hmap.get_mut(key) {
             None => None,
             Some(entry) => {
-                entry.user_on_get();
+                self._slru.on_get(entry);
                 Some(entry.get_val_user_mut())
             }
         }
     }
+}
+#[derive(PartialEq, Eq)]
+enum ScanStatus {
+    Stopped,
+    RunningProbation,
+    RunningProtected,
 }
 pub struct SLRUShared<E, K, V, Cid, Umeta, Fscan, HB>
 where
@@ -205,6 +211,7 @@ where
 {
     _probation: crate::lru::LRUShared<E, K, V, Cid, Umeta, Fscan, HB>,
     _protected: crate::lru::LRUShared<E, K, V, Cid, Umeta, Fscan, HB>,
+    _scanstatus: ScanStatus,
 }
 
 impl<
@@ -235,6 +242,7 @@ impl<
                     protected.1,
                     access_scan,
                 ),
+            _scanstatus: ScanStatus::Stopped,
         }
     }
     pub fn insert_shared(
@@ -249,13 +257,17 @@ impl<
             // Note that since we already found the key, we can not have had any
             // clash (maybe_old_entry == None)
             self._probation.remove_shared(just_inserted);
-            self._protected.insert_shared(hmap, None, key)
+            let res = self._protected.insert_shared(hmap, None, key);
+            self.update_scan_status();
+            res
         } else if just_inserted.get_cache_id() == self._protected.get_cache_id()
         {
             // inserted more than once, in protected
             // Note that since we already found the key, we can not have had any
             // clash (maybe_old_entry == None)
-            self._protected.insert_shared(hmap, None, key)
+            let res = self._protected.insert_shared(hmap, None, key);
+            self.update_scan_status();
+            res
         } else {
             // new insert, not in any cache.
             // We might have had a clash, but we will insert into probation
@@ -271,17 +283,22 @@ impl<
                         == self._probation.get_cache_id()
                     {
                         // old_entry in probation.
-                        self._probation.insert_shared(
+                        let res = self._probation.insert_shared(
                             hmap,
                             Some(old_entry),
                             key,
-                        )
+                        );
+                        self.update_scan_status();
+                        res
                     } else {
                         // old_entry in protected
                         // FIXME: we won't alert the user of the removal of
                         //   old_entry!
                         self._protected.remove_shared(&old_entry.into());
-                        self._probation.insert_shared(hmap, None, key)
+                        let res =
+                            self._probation.insert_shared(hmap, None, key);
+                        self.update_scan_status();
+                        res
                     }
                 }
             }
@@ -290,18 +307,73 @@ impl<
     pub fn clear_shared(&mut self) {
         self._probation.clear_shared();
         self._protected.clear_shared();
+        self._scanstatus = ScanStatus::Stopped;
     }
     pub fn remove_shared(&mut self, entry: &E) {
-        if entry.get_cache_id() == self._probation.get_cache_id() {
+        let res = if entry.get_cache_id() == self._probation.get_cache_id() {
             self._probation.remove_shared(entry)
         } else {
             self._protected.remove_shared(entry)
-        }
+        };
+        self.update_scan_status();
+        res
     }
     pub fn get_cache_ids(&self) -> (Cid, Cid) {
         (
             self._probation.get_cache_id(),
             self._protected.get_cache_id(),
         )
+    }
+    pub fn on_get(&mut self, entry: &mut E) {
+        if entry.get_cache_id() == self._probation.get_cache_id() {
+            self._probation.on_get(entry);
+        } else {
+            self._protected.on_get(entry);
+        }
+        self.update_scan_status();
+    }
+    pub fn start_scan(&mut self) {
+        self._probation.start_scan();
+        match self._probation.is_scan_running() {
+            true => {
+                self._scanstatus = ScanStatus::RunningProbation;
+            }
+            false => {
+                self._protected.start_scan();
+                match self._protected.is_scan_running() {
+                    true => {
+                        self._scanstatus = ScanStatus::RunningProtected;
+                    }
+                    false => {
+                        self._scanstatus = ScanStatus::Stopped;
+                    }
+                }
+            }
+        }
+    }
+    pub fn is_scan_running(&self) -> bool {
+        self._scanstatus != ScanStatus::Stopped
+    }
+    fn update_scan_status(&mut self) {
+        match self._scanstatus {
+            ScanStatus::Stopped => {}
+            ScanStatus::RunningProbation => {
+                match self._probation.is_scan_running() {
+                    true => {}
+                    false => {
+                        self._protected.start_scan();
+                        self._scanstatus = ScanStatus::RunningProtected;
+                    }
+                }
+            }
+            ScanStatus::RunningProtected => {
+                match self._protected.is_scan_running() {
+                    true => {}
+                    false => {
+                        self._scanstatus = ScanStatus::Stopped;
+                    }
+                }
+            }
+        }
     }
 }
