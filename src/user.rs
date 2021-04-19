@@ -90,6 +90,7 @@ where
     fn get_val_user_mut(&mut self) -> (&mut V, &mut Umeta);
 
     fn user_on_insert(&mut self, old_entry: Option<&mut Self>);
+    fn user_on_get(&mut self);
 }
 
 pub struct Entry<K, V, Cid, Umeta>
@@ -177,4 +178,30 @@ where
             ),
         }
     }
+    fn user_on_get(&mut self) {
+        self.user_data.on_get(&mut self.val)
+    }
 }
+/*
+struct EntryIt<K, V, Cid, Umeta>
+where
+    Umeta: Meta<V>,
+    Cid: Copy,
+{
+    e: Option<::std::ptr::NonNull<Entry<K, V, Cid, Umeta>>>,
+}
+
+impl<K, V, Cid, Umeta: Meta<V>> Iterator for EntryIt<K, V, Cid, Umeta>
+where
+    Umeta: Meta<V>,
+    Cid: Copy,
+{
+    type Item = ::std::ptr::NonNull<EntryIt<K, V, Cid, Umeta>>;
+
+    fn next(
+        &mut self,
+    ) -> Option<::std::ptr::NonNull<EntryIt<K, V, Cid, Umeta>>> {
+        self.get_tail_ptr()
+    }
+}
+*/

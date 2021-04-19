@@ -39,9 +39,7 @@ where
         V,
         ::std::marker::PhantomData<K>,
         Umeta,
-        fn(
-            ::std::ptr::NonNull<LRUEntry<K, V, Umeta>>,
-        ) -> Option<::std::ptr::NonNull<LRUEntry<K, V, Umeta>>>,
+        fn(::std::ptr::NonNull<LRUEntry<K, V, Umeta>>),
         HB,
     >,
 }
@@ -68,10 +66,7 @@ impl<
                 V,
                 ::std::marker::PhantomData<K>,
                 Umeta,
-                fn(
-                    ::std::ptr::NonNull<LRUEntry<K, V, Umeta>>,
-                )
-                    -> Option<::std::ptr::NonNull<LRUEntry<K, V, Umeta>>>,
+                fn(::std::ptr::NonNull<LRUEntry<K, V, Umeta>>),
                 HB,
             >::new(
                 entries,
@@ -153,18 +148,23 @@ impl<
             }
         }
     }
-    // FIXME: we should run the 'on_get' function on the user meta
-    pub fn get(&self, key: &K) -> Option<(&V, &Umeta)> {
-        match self._hmap.get(key) {
+    pub fn get(&mut self, key: &K) -> Option<(&V, &Umeta)> {
+        match self._hmap.get_mut(key) {
             None => None,
-            Some(entry) => Some((entry.get_val(), entry.get_user())),
+            Some(entry) => {
+                entry.user_on_get();
+                Some((entry.get_val(), entry.get_user()))
+            }
         }
     }
     pub fn get_mut(&mut self, key: &K) -> Option<(&mut V, &mut Umeta)> {
         match self._hmap.get_mut(key) {
             None => None,
             //Some(mut entry) => Some((entry.get_val(), entry.get_user())),
-            Some(entry) => Some(entry.get_val_user_mut()),
+            Some(entry) => {
+                entry.user_on_get();
+                Some(entry.get_val_user_mut())
+            }
         }
     }
 }
@@ -173,7 +173,7 @@ where
     E: user::EntryT<K, V, Cid, Umeta>,
     V: Sized,
     Cid: Eq + Copy,
-    Fscan: FnMut(::std::ptr::NonNull<E>) -> Option<::std::ptr::NonNull<E>>,
+    Fscan: Fn(::std::ptr::NonNull<E>),
     Umeta: user::Meta<V>,
 {
     _capacity: usize,
@@ -186,7 +186,7 @@ where
     _val: ::std::marker::PhantomData<V>,
     _meta: ::std::marker::PhantomData<Umeta>,
     _hashbuilder: ::std::marker::PhantomData<HB>,
-    _scan: crate::scan::Scan<E, Fscan>,
+    _scan: crate::scan::Scan<E, K, V, Cid, Umeta, Fscan>,
 }
 
 impl<
@@ -195,7 +195,7 @@ impl<
         V,
         Cid: Eq + Copy,
         Umeta: user::Meta<V>,
-        Fscan: FnMut(::std::ptr::NonNull<E>) -> Option<::std::ptr::NonNull<E>>,
+        Fscan: Fn(::std::ptr::NonNull<E>),
         HB: ::std::hash::BuildHasher,
     > LRUShared<E, K, V, Cid, Umeta, Fscan, HB>
 {
@@ -218,10 +218,7 @@ impl<
             _val: ::std::marker::PhantomData,
             _meta: ::std::marker::PhantomData,
             _hashbuilder: std::marker::PhantomData,
-            _scan: crate::scan::Scan {
-                last: None,
-                f: access_scan,
-            },
+            _scan: crate::scan::Scan::new(access_scan),
         }
     }
     /// `insert_shared` does not actually insert anything. It will only fix
@@ -236,8 +233,8 @@ impl<
     ) -> InsertResultShared<E, K> {
         let just_inserted = hmap.get_mut(&key).unwrap();
         self._used += 1;
+        self._scan.apply_raw(just_inserted.into());
         *just_inserted.get_cache_id_mut() = self._cache_id;
-        (self._scan.f)(just_inserted.into());
 
         match maybe_old_entry {
             None => {
@@ -254,11 +251,13 @@ impl<
                     }
                     self._head = Some(just_inserted.into());
                     let mut to_remove = self._tail.unwrap();
+                    self._scan.check_and_next(to_remove);
+                    self._scan.apply_next();
                     unsafe {
-                        let mut rm_tail_head =
+                        let mut to_rm_head =
                             to_remove.as_mut().get_head_ptr().unwrap();
-                        rm_tail_head.as_mut().set_tail_ptr(None);
-                        self._tail = Some(rm_tail_head);
+                        to_rm_head.as_mut().set_tail_ptr(None);
+                        self._tail = Some(to_rm_head);
                         return InsertResultShared::OldTailKey(
                             to_remove.as_mut().get_key().clone(),
                         );
@@ -267,6 +266,8 @@ impl<
                 match self._head {
                     None => {
                         // first entry in the LRU, both head and tail
+                        // since it's the first entry, we don't need to start
+                        // scanning anything
                         self._head = Some(just_inserted.into());
                         self._tail = Some(just_inserted.into());
                     }
@@ -278,6 +279,7 @@ impl<
                                 .set_head_ptr(Some(just_inserted.into()))
                         };
                         self._head = Some(just_inserted.into());
+                        self._scan.apply_next();
                     }
                 }
                 return InsertResultShared::Success;
@@ -289,11 +291,15 @@ impl<
                 //
                 // By definition, we know that we get the 'old_entry' only if it
                 // is in the same cache_id as us
+                // Also, we don't have to check the LRU size since here the
+                // number of elements remains the same
 
                 just_inserted.user_on_insert(Some(&mut old_entry));
-                // the clash was on something in our own cache, we got
-                // lucky. In this case even the head or
-                // tail might need to be changed
+                // The clash was on something in our own cache.
+                // In this case the head or tail might need to be changed
+
+                self._scan.check_and_next((&old_entry).into());
+                self._scan.apply_next();
                 match old_entry.get_head_ptr() {
                     None => {
                         // we removed the old head with the hash clash
@@ -368,6 +374,7 @@ impl<
         self._tail = None;
     }
     pub fn remove_shared(&mut self, entry: &E) {
+        self._scan.check_and_next(entry.into());
         if None == entry.get_head_ptr() {
             // we removed the head
             match entry.get_tail_ptr() {
@@ -421,6 +428,7 @@ impl<
     }
     /// make the key the head of the LRU.
     pub fn make_head(&mut self, entry: &mut E) {
+        self._scan.check_and_next(entry.into());
         match entry.get_head_ptr() {
             None => {
                 // already the head, nothing to do
