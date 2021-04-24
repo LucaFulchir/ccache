@@ -54,11 +54,17 @@ impl From<Generation> for bool {
         }
     }
 }
+impl Default for Generation {
+    fn default() -> Self {
+        Generation::Day
+    }
+}
 
 pub trait CidCounter<Cid>: crate::cid::Cid
 where
     Cid: crate::cid::Cid,
 {
+    fn new(cid: Cid) -> Self;
     fn get_cid(&self) -> Cid;
     fn set_cid(&mut self, cid: Cid);
 
@@ -102,11 +108,11 @@ impl From<u8> for WTLFUCid {
     pub struct Full32(u32);
     impl Debug;
     #[inline]
-    pub u8, into WTLFUCid, get_cid, set_cid: 2, 0;
+    pub u8, into WTLFUCid, g_cid, s_cid: 2, 0;
     #[inline]
-    pub into Generation, get_generation, set_generation: 0;
+    pub into Generation, g_generation, s_generation: 0;
     #[inline]
-    pub u32, get_counter, set_counter: 29, 0;
+    pub u32, g_counter, s_counter: 29, 0;
 }
 impl crate::cid::Cid for Full32 {}
 
@@ -117,32 +123,37 @@ impl Default for Full32 {
 }
 
 impl CidCounter<WTLFUCid> for Full32 {
+    fn new(cid: WTLFUCid) -> Self {
+        let mut res = Full32::default();
+        res.set_cid(cid);
+        res
+    }
     fn get_cid(&self) -> WTLFUCid {
-        self.get_cid()
+        self.g_cid()
     }
     fn set_cid(&mut self, cid: WTLFUCid) {
-        self.set_cid(cid as u8)
+        self.s_cid(cid as u8)
     }
 
     fn get_generation(&self) -> Generation {
-        self.get_generation().into()
+        self.g_generation().into()
     }
     fn flip_generation(&mut self) {
-        match self.get_generation().into() {
-            Generation::Day => self.set_generation(Generation::Night.into()),
-            Generation::Night => self.set_generation(Generation::Day.into()),
+        match self.g_generation().into() {
+            Generation::Day => self.s_generation(Generation::Night.into()),
+            Generation::Night => self.s_generation(Generation::Day.into()),
         }
     }
 
     fn get_counter(&self) -> u32 {
-        self.get_counter()
+        self.g_counter()
     }
     fn add(&mut self) {
-        let tmp = self.get_counter();
-        self.set_counter(tmp + 1);
+        let tmp = self.g_counter();
+        self.s_counter(tmp + 1);
     }
     fn halve(&mut self) {
-        let tmp = self.get_counter();
-        self.set_counter(tmp / 2);
+        let tmp = self.g_counter();
+        self.s_counter(tmp / 2);
     }
 }

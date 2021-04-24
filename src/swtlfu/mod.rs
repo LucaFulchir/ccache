@@ -16,7 +16,7 @@
 
 mod counter;
 
-use crate::results::InsertResult;
+use crate::results::{InsertResult, InsertResultShared};
 use crate::user;
 use bitvec::prelude::*;
 
@@ -62,9 +62,13 @@ where
     Fscan: Sized + Copy + Fn(::std::ptr::NonNull<E>),
     HB: ::std::hash::BuildHasher,
 {
-    _reset_counters: counter::Full32,
     _window: crate::lru::LRUShared<E, K, V, CidCtr, Umeta, Fscan, HB>,
     _slru: crate::slru::SLRUShared<E, K, V, CidCtr, Umeta, Fscan, HB>,
+    _entries: usize,
+    _generation: counter::Generation,
+    _cid_window: Cid,
+    _cid_probation: Cid,
+    _cid_protected: Cid,
     _cid: ::std::marker::PhantomData<Cid>,
 }
 
@@ -80,12 +84,15 @@ impl<
     > SWTLFUShared<E, K, V, Cid, CidCtr, Umeta, Fscan, HB>
 {
     pub fn new_standard(
-        window_cid: CidCtr,
-        probation_cid: CidCtr,
-        protected_cid: CidCtr,
+        window_cid: Cid,
+        probation_cid: Cid,
+        protected_cid: Cid,
         entries: usize,
         access_scan: Fscan
     ) -> SWTLFUShared<E, K, V, Cid, CidCtr, Umeta, Fscan, HB> {
+        // We keep at least one element in each cache
+
+
         let floor_window_entries = ((entries as f64) * 0.01) as usize;
         let window_entries = ::std::cmp::max(1, floor_window_entries);
 
@@ -94,7 +101,7 @@ impl<
         let (probation_entries, protected_entries) =
             match ((main_entries as f64) * 0.2) as usize {
                 0 => {
-                    if main_entries <= 1 {
+                    if main_entries <= 2 {
                         (1, 1)
                     } else {
                         (1, main_entries - 1)
@@ -109,30 +116,33 @@ impl<
             access_scan)
     }
     pub fn new(
-        window: (usize, CidCtr),
-        probation: (usize, CidCtr),
-        protected: (usize, CidCtr),
+        window: (usize, Cid),
+        probation: (usize, Cid),
+        protected: (usize, Cid),
         access_scan: Fscan,
     ) -> SWTLFUShared<E, K, V, Cid, CidCtr, Umeta, Fscan, HB> {
 
         SWTLFUShared {
-            _reset_counters: counter::Full32::default(),
             _window: 
                 crate::lru::LRUShared::<E, K, V, CidCtr, Umeta, Fscan, HB>::new(
                     window.0,
-                    window.1,
+                    CidCtr::new(window.1),
                     access_scan,
                 ),
             _slru:
                 crate::slru::SLRUShared::<E, K, V, CidCtr, Umeta, Fscan, HB>::new(
-                    probation,
-                    protected,
+                    (probation.0, CidCtr::new(probation.1)),
+                    (protected.0, CidCtr::new(protected.1)),
                     access_scan,
                 ),
+            _entries: window.0 + probation.0 + protected.0,
+            _generation: counter::Generation::default(),
+            _cid_window: window.1,
+            _cid_probation: probation.1,
+            _cid_protected: protected.1,
             _cid: ::std::marker::PhantomData,
         }
     }
-    /*
     pub fn insert_shared(
         &mut self,
         hmap: &mut ::std::collections::HashMap<K, E, HB>,
@@ -140,14 +150,38 @@ impl<
         key: &K,
     ) -> InsertResultShared<E, K> {
         let just_inserted = hmap.get_mut(&key).unwrap();
-        *just_inserted.get_cache_id_mut() = self._cache_id;
 
         match maybe_old_entry {
             None => {
-                just_inserted.user_on_insert(None);
+                let cid_j_i = just_inserted.get_cache_id().get_cid();
+                if cid_j_i == self._cid_window {
+                    // promote it to main
+                    self._window.remove_shared(just_inserted);
+                    self._slru.insert_shared(hmap, None, key)
+                } else if (cid_j_i == self._cid_probation) ||
+                    (cid_j_i == self._cid_protected) {
+                    // let the main shared handle this
+                    self._slru.insert_shared(hmap, None, key);
+                    InsertResultShared::Success 
+                } else {
+                    // put in window
+                    match self._window.insert_shared(hmap, None, key) {
+                        // if we have evicted, they are given a second chance
+                        InsertResultShared::OldTailKey(old_tail_key) => {
+                            // window eviction.
+                            // TODO: check frequencies, see if we can insert on slru
+                            InsertResultShared::Success
+                        }
+                        res @ _ => {
+                            // either success or hash clash. nothing we can do
+                            res
+                        }
+                    }
+                }
             }
-            Some(old_entry) => {}
+            Some(old_entry) => {
+                    InsertResultShared::Success
+            }
         }
     }
-    */
 }
