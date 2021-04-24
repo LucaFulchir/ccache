@@ -71,25 +71,27 @@ where
 }
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
-pub enum TLFUCid {
+pub enum WTLFUCid {
     None = 0,
-    SLRUProbation = 1,
-    SLRUProtected = 2,
+    Window = 1,
+    SLRUProbation = 2,
+    SLRUProtected = 3,
 }
-impl Default for TLFUCid {
+impl Default for WTLFUCid {
     fn default() -> Self {
-        TLFUCid::None
+        WTLFUCid::None
     }
 }
-impl crate::cid::Cid for TLFUCid {}
-impl From<u8> for TLFUCid {
+impl crate::cid::Cid for WTLFUCid {}
+impl From<u8> for WTLFUCid {
     fn from(raw: u8) -> Self {
         match raw {
-            0 => TLFUCid::None,
-            1 => TLFUCid::SLRUProbation,
-            2 => TLFUCid::SLRUProtected,
+            0 => WTLFUCid::None,
+            1 => WTLFUCid::Window,
+            2 => WTLFUCid::SLRUProbation,
+            3 => WTLFUCid::SLRUProtected,
             _ => {
-                ::std::panic!("No such binary repr of TLFUCid")
+                ::std::panic!("No such binary repr of WTLFUCid")
             }
         }
     }
@@ -100,7 +102,7 @@ impl From<u8> for TLFUCid {
     pub struct Full32(u32);
     impl Debug;
     #[inline]
-    pub u8, into TLFUCid, get_cid, set_cid: 2, 0;
+    pub u8, into WTLFUCid, get_cid, set_cid: 2, 0;
     #[inline]
     pub into Generation, get_generation, set_generation: 0;
     #[inline]
@@ -114,11 +116,11 @@ impl Default for Full32 {
     }
 }
 
-impl CidCounter<TLFUCid> for Full32 {
-    fn get_cid(&self) -> TLFUCid {
+impl CidCounter<WTLFUCid> for Full32 {
+    fn get_cid(&self) -> WTLFUCid {
         self.get_cid()
     }
-    fn set_cid(&mut self, cid: TLFUCid) {
+    fn set_cid(&mut self, cid: WTLFUCid) {
         self.set_cid(cid as u8)
     }
 
