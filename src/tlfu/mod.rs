@@ -65,33 +65,36 @@ pub trait Freq {
 // last-reset counter. each access will check and halve just one more element
 // this will mean that after `W` operations we have halved the whole counters
 // and don't need to keep all generations
-pub struct TLFUShared<E, K, V, Cid, Umeta, HB>
+pub struct TLFUShared<E, K, V, Cid, Umeta, Fscan, HB>
 where
     E: user::EntryT<K, V, Cid, Umeta>,
     V: Sized,
-    Cid: Eq + Copy + Freq,
+    Cid: Eq + Copy + Freq + Default,
     Umeta: user::Meta<V>,
+    Fscan: Sized + Copy + Fn(::std::ptr::NonNull<E>),
     HB: ::std::hash::BuildHasher,
 {
     _reset_counters: counter::Full,
     _doorkeeper: ::bitvec::vec::BitVec<Msb0, u64>,
     _counters: ::std::vec::Vec<counter::Full>,
-    _slru: crate::slru::SLRUShared<E, K, V, Cid, Umeta, HB>,
+    _slru: crate::slru::SLRUShared<E, K, V, Cid, Umeta, Fscan, HB>,
 }
 
 impl<
         E: user::EntryT<K, V, Cid, Umeta>,
         K: ::std::hash::Hash + Clone + Eq,
         V,
-        Cid: Eq + Copy + Freq,
+        Cid: Eq + Copy + Freq + Default,
         Umeta: user::Meta<V>,
+        Fscan: Sized + Copy + Fn(::std::ptr::NonNull<E>),
         HB: ::std::hash::BuildHasher,
-    > TLFUShared<E, K, V, Cid, Umeta, HB>
+    > TLFUShared<E, K, V, Cid, Umeta, Fscan, HB>
 {
     pub fn new(
         entries: usize,
         cids: [Cid; 2],
-    ) -> TLFUShared<E, K, V, Cid, Umeta, HB> {
+        access_scan: Fscan,
+    ) -> TLFUShared<E, K, V, Cid, Umeta, Fscan, HB> {
         let (probation_entries, protected_entries) =
             match ((entries as f64) * 0.2) as usize {
                 0 => {
@@ -105,15 +108,17 @@ impl<
             };
 
         TLFUShared {
-            _reset_counters: counter::Full::new(),
+            _reset_counters: counter::Full::default(),
             _doorkeeper: ::bitvec::vec::BitVec::<Msb0, u64>::with_capacity(
                 entries,
             ),
             _counters: ::std::vec::Vec::<counter::Full>::with_capacity(entries),
-            _slru: crate::slru::SLRUShared::<E, K, V, Cid, Umeta, HB>::new(
-                (probation_entries, cids[0]),
-                (protected_entries, cids[1]),
-            ),
+            _slru:
+                crate::slru::SLRUShared::<E, K, V, Cid, Umeta, Fscan, HB>::new(
+                    (probation_entries, cids[0]),
+                    (protected_entries, cids[1]),
+                    access_scan,
+                ),
         }
     }
     /*

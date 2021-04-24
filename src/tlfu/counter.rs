@@ -1,3 +1,5 @@
+use bitfield::bitfield;
+
 /*
  * Copyright 2021 Luca Fulchir <luker@fenrirproject.org>
  *
@@ -18,10 +20,10 @@
 // the idea will be to have a bitvector under us, and implement From<...>
 // methods to load/save on the right bits
 
-// We only have two generations to keep track of
+// We only have two generations to keep track of.
 // There is no "new" and "old" generation, since
 // every X queries the "old" will become the "new"
-// so the naming should not give old/new ideas
+// The naming should not give old/new ideas
 #[derive(PartialEq, Eq, Copy, Clone)]
 enum Generation {
     Day,
@@ -44,23 +46,117 @@ impl From<bool> for Generation {
         }
     }
 }
-
-static CounterMask: u32 = u32::MAX >> 1;
-static GenerationMask: u32 = !CounterMask;
-
-// Counter can go up to 2^31. the last bit is reserved to track the generation
-//
-pub struct Full {
-    counter: u32,
-}
-
-impl Full {
-    #[inline]
-    pub fn new() -> Full {
-        Full {
-            counter: 0, // generation: Day
+impl From<Generation> for bool {
+    fn from(g: Generation) -> Self {
+        match g {
+            Generation::Day => false,
+            Generation::Night => true,
         }
     }
+}
+
+pub trait CidCounter<Cid>
+where
+    Cid: Eq + Copy,
+{
+    fn get_cid(&self) -> Cid;
+    fn set_cid(&mut self, cid: Cid);
+
+    fn get_generation(&self) -> Generation;
+    fn flip_generation(&mut self);
+
+    fn get_counter(&self) -> u32;
+    fn add(&mut self);
+    fn halve(&mut self);
+}
+
+#[derive(Debug, PartialEq, Eq, Copy, Clone)]
+pub enum TLFUCid {
+    None = 0,
+    SLRUProbation = 1,
+    SLRUProtected = 2,
+}
+impl Default for TLFUCid {
+    fn default() -> Self {
+        TLFUCid::None
+    }
+}
+impl From<u8> for TLFUCid {
+    fn from(raw: u8) -> Self {
+        match raw {
+            0 => TLFUCid::None,
+            1 => TLFUCid::SLRUProbation,
+            2 => TLFUCid::SLRUProtected,
+            _ => {
+                ::std::panic!("No such binary repr of TLFUCid")
+            }
+        }
+    }
+}
+
+::bitfield::bitfield! {
+    pub struct Full32(u32);
+    impl Debug;
+    #[inline]
+    pub u8, into TLFUCid, get_cid, set_cid: 2, 0;
+    #[inline]
+    pub into Generation, get_generation, set_generation: 0;
+    #[inline]
+    pub u32, get_counter, set_counter: 29, 0;
+}
+
+impl CidCounter<TLFUCid> for Full32 {
+    fn get_cid(&self) -> TLFUCid {
+        self.get_cid()
+    }
+    fn set_cid(&mut self, cid: TLFUCid) {
+        self.set_cid(cid as u8)
+    }
+
+    fn get_generation(&self) -> Generation {
+        self.get_generation().into()
+    }
+    fn flip_generation(&mut self) {
+        match self.get_generation().into() {
+            Generation::Day => self.set_generation(Generation::Night.into()),
+            Generation::Night => self.set_generation(Generation::Day.into()),
+        }
+    }
+
+    fn get_counter(&self) -> u32 {
+        self.get_counter()
+    }
+    fn add(&mut self) {
+        let tmp = self.get_counter();
+        self.set_counter(tmp + 1);
+    }
+    fn halve(&mut self) {
+        let tmp = self.get_counter();
+        self.set_counter(tmp / 2);
+    }
+}
+// u32 with following bitfields, from the most significant:
+//  * 2 bit: Cid
+//  * 1 bit: Generation
+//  * 29 bits: counter
+static CidMask: u32 = !(u32::MAX >> 2);
+static CounterMask: u32 = u32::MAX >> 3;
+static GenerationMask: u32 = !(CounterMask | CidMask);
+
+pub struct Full {
+    counter: u32,
+    //_cid: ::std::marker::PhantomData<Cid>;
+}
+
+impl Default for Full {
+    #[inline]
+    fn default() -> Self {
+        Full { counter: 0 }
+    }
+}
+
+//impl<Cid> CidCounter<Full> for Full<Cid> {
+impl Full {
     #[inline]
     fn generation(&self) -> Generation {
         ((self.counter & GenerationMask) != 0).into()
