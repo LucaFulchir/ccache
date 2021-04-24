@@ -65,36 +65,39 @@ pub trait Freq {
 // last-reset counter. each access will check and halve just one more element
 // this will mean that after `W` operations we have halved the whole counters
 // and don't need to keep all generations
-pub struct TLFUShared<E, K, V, Cid, Umeta, Fscan, HB>
+pub struct TLFUShared<E, K, V, Cid, CidCtr, Umeta, Fscan, HB>
 where
-    E: user::EntryT<K, V, Cid, Umeta>,
+    E: user::EntryT<K, V, CidCtr, Umeta>,
     V: Sized,
-    Cid: Eq + Copy + Freq + Default,
+    Cid: Eq + Copy + Default,
+    CidCtr: counter::CidCounter<Cid>,
     Umeta: user::Meta<V>,
     Fscan: Sized + Copy + Fn(::std::ptr::NonNull<E>),
     HB: ::std::hash::BuildHasher,
 {
-    _reset_counters: counter::Full,
+    _reset_counters: counter::Full32,
     _doorkeeper: ::bitvec::vec::BitVec<Msb0, u64>,
-    _counters: ::std::vec::Vec<counter::Full>,
-    _slru: crate::slru::SLRUShared<E, K, V, Cid, Umeta, Fscan, HB>,
+    _counters: ::std::vec::Vec<counter::Full32>,
+    _slru: crate::slru::SLRUShared<E, K, V, CidCtr, Umeta, Fscan, HB>,
+    _cid: ::std::marker::PhantomData<Cid>,
 }
 
 impl<
-        E: user::EntryT<K, V, Cid, Umeta>,
+        E: user::EntryT<K, V, CidCtr, Umeta>,
         K: ::std::hash::Hash + Clone + Eq,
         V,
-        Cid: Eq + Copy + Freq + Default,
+        Cid: Eq + Copy + Default,
+        CidCtr: counter::CidCounter<Cid>,
         Umeta: user::Meta<V>,
         Fscan: Sized + Copy + Fn(::std::ptr::NonNull<E>),
         HB: ::std::hash::BuildHasher,
-    > TLFUShared<E, K, V, Cid, Umeta, Fscan, HB>
+    > TLFUShared<E, K, V, Cid, CidCtr, Umeta, Fscan, HB>
 {
     pub fn new(
         entries: usize,
-        cids: [Cid; 2],
+        cids: [CidCtr; 2],
         access_scan: Fscan,
-    ) -> TLFUShared<E, K, V, Cid, Umeta, Fscan, HB> {
+    ) -> TLFUShared<E, K, V, Cid, CidCtr, Umeta, Fscan, HB> {
         let (probation_entries, protected_entries) =
             match ((entries as f64) * 0.2) as usize {
                 0 => {
@@ -108,17 +111,18 @@ impl<
             };
 
         TLFUShared {
-            _reset_counters: counter::Full::default(),
+            _reset_counters: counter::Full32::default(),
             _doorkeeper: ::bitvec::vec::BitVec::<Msb0, u64>::with_capacity(
                 entries,
             ),
-            _counters: ::std::vec::Vec::<counter::Full>::with_capacity(entries),
+            _counters: ::std::vec::Vec::<counter::Full32>::with_capacity(entries),
             _slru:
-                crate::slru::SLRUShared::<E, K, V, Cid, Umeta, Fscan, HB>::new(
+                crate::slru::SLRUShared::<E, K, V, CidCtr, Umeta, Fscan, HB>::new(
                     (probation_entries, cids[0]),
                     (protected_entries, cids[1]),
                     access_scan,
                 ),
+            _cid: ::std::marker::PhantomData,
         }
     }
     /*

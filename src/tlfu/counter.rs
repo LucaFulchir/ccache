@@ -25,7 +25,7 @@ use bitfield::bitfield;
 // every X queries the "old" will become the "new"
 // The naming should not give old/new ideas
 #[derive(PartialEq, Eq, Copy, Clone)]
-enum Generation {
+pub enum Generation {
     Day,
     Night,
 }
@@ -55,9 +55,9 @@ impl From<Generation> for bool {
     }
 }
 
-pub trait CidCounter<Cid>
+pub trait CidCounter<Cid>: Eq + Copy + Clone + Default
 where
-    Cid: Eq + Copy,
+    Cid: Eq + Copy + Clone + Default,
 {
     fn get_cid(&self) -> Cid;
     fn set_cid(&mut self, cid: Cid);
@@ -95,6 +95,7 @@ impl From<u8> for TLFUCid {
 }
 
 ::bitfield::bitfield! {
+    #[derive(PartialEq, Eq, Copy, Clone)]
     pub struct Full32(u32);
     impl Debug;
     #[inline]
@@ -103,6 +104,12 @@ impl From<u8> for TLFUCid {
     pub into Generation, get_generation, set_generation: 0;
     #[inline]
     pub u32, get_counter, set_counter: 29, 0;
+}
+
+impl Default for Full32 {
+    fn default() -> Self {
+        Full32(0)
+    }
 }
 
 impl CidCounter<TLFUCid> for Full32 {
@@ -133,52 +140,5 @@ impl CidCounter<TLFUCid> for Full32 {
     fn halve(&mut self) {
         let tmp = self.get_counter();
         self.set_counter(tmp / 2);
-    }
-}
-// u32 with following bitfields, from the most significant:
-//  * 2 bit: Cid
-//  * 1 bit: Generation
-//  * 29 bits: counter
-static CidMask: u32 = !(u32::MAX >> 2);
-static CounterMask: u32 = u32::MAX >> 3;
-static GenerationMask: u32 = !(CounterMask | CidMask);
-
-pub struct Full {
-    counter: u32,
-    //_cid: ::std::marker::PhantomData<Cid>;
-}
-
-impl Default for Full {
-    #[inline]
-    fn default() -> Self {
-        Full { counter: 0 }
-    }
-}
-
-//impl<Cid> CidCounter<Full> for Full<Cid> {
-impl Full {
-    #[inline]
-    fn generation(&self) -> Generation {
-        ((self.counter & GenerationMask) != 0).into()
-    }
-    #[inline]
-    pub fn next(&mut self, max: &Full) {
-        let currentGen = self.generation();
-        match currentGen == max.generation() {
-            true => self.counter += 1,
-            false => {
-                self.counter = (self.counter & CounterMask) / 2;
-                match currentGen {
-                    Generation::Day => {
-                        // siwtch to day, MSB == 1
-                        self.counter ^= CounterMask;
-                    }
-                    Generation::Night => {
-                        // switch to day == MSB to 0
-                        self.counter &= GenerationMask;
-                    }
-                }
-            }
-        }
     }
 }
