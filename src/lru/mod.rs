@@ -172,7 +172,7 @@ pub struct LRUShared<E, K, V, Cid, Umeta, Fscan, HB>
 where
     E: user::EntryT<K, V, Cid, Umeta>,
     V: Sized,
-    Cid: Eq + Copy,
+    Cid: crate::cid::Cid,
     Fscan: Sized + Fn(::std::ptr::NonNull<E>),
     Umeta: user::Meta<V>,
 {
@@ -193,7 +193,7 @@ impl<
         E: user::EntryT<K, V, Cid, Umeta>,
         K: ::std::hash::Hash + Clone + Eq,
         V,
-        Cid: Eq + Copy,
+        Cid: crate::cid::Cid,
         Umeta: user::Meta<V>,
         Fscan: Fn(::std::ptr::NonNull<E>),
         HB: ::std::hash::BuildHasher,

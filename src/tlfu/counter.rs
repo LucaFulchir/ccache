@@ -55,9 +55,9 @@ impl From<Generation> for bool {
     }
 }
 
-pub trait CidCounter<Cid>: Eq + Copy + Clone + Default
+pub trait CidCounter<Cid>: crate::cid::Cid
 where
-    Cid: Eq + Copy + Clone + Default,
+    Cid: crate::cid::Cid,
 {
     fn get_cid(&self) -> Cid;
     fn set_cid(&mut self, cid: Cid);
@@ -81,6 +81,7 @@ impl Default for TLFUCid {
         TLFUCid::None
     }
 }
+impl crate::cid::Cid for TLFUCid {}
 impl From<u8> for TLFUCid {
     fn from(raw: u8) -> Self {
         match raw {
@@ -105,6 +106,7 @@ impl From<u8> for TLFUCid {
     #[inline]
     pub u32, get_counter, set_counter: 29, 0;
 }
+impl crate::cid::Cid for Full32 {}
 
 impl Default for Full32 {
     fn default() -> Self {

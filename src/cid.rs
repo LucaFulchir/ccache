@@ -14,10 +14,6 @@
  * limitations under the License.
  */
 
-pub mod cid;
-pub mod lru;
-pub mod results;
-mod scan;
-pub mod slru;
-pub mod tlfu;
-pub mod user;
+pub trait Cid: Eq + Copy + Clone + Default {}
+
+impl<T> Cid for ::std::marker::PhantomData<T> {}

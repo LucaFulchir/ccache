@@ -69,7 +69,7 @@ pub struct TLFUShared<E, K, V, Cid, CidCtr, Umeta, Fscan, HB>
 where
     E: user::EntryT<K, V, CidCtr, Umeta>,
     V: Sized,
-    Cid: Eq + Copy + Default,
+    Cid: crate::cid::Cid,
     CidCtr: counter::CidCounter<Cid>,
     Umeta: user::Meta<V>,
     Fscan: Sized + Copy + Fn(::std::ptr::NonNull<E>),
@@ -86,7 +86,7 @@ impl<
         E: user::EntryT<K, V, CidCtr, Umeta>,
         K: ::std::hash::Hash + Clone + Eq,
         V,
-        Cid: Eq + Copy + Default,
+        Cid: crate::cid::Cid,
         CidCtr: counter::CidCounter<Cid>,
         Umeta: user::Meta<V>,
         Fscan: Sized + Copy + Fn(::std::ptr::NonNull<E>),

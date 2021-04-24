@@ -53,6 +53,7 @@ impl Default for SLRUCid {
         SLRUCid::None(SLRUCidNone::default())
     }
 }
+impl crate::cid::Cid for SLRUCid {}
 
 /// SLRU ( https://en.wikipedia.org/wiki/Cache_replacement_policies#Segmented_LRU_(SLRU) )
 /// is a Segmented LRU it consists of two LRU:
@@ -205,7 +206,7 @@ pub struct SLRUShared<E, K, V, Cid, Umeta, Fscan, HB>
 where
     E: user::EntryT<K, V, Cid, Umeta>,
     V: Sized,
-    Cid: Eq + Copy + Default,
+    Cid: crate::cid::Cid,
     Umeta: user::Meta<V>,
     Fscan: Sized + Fn(::std::ptr::NonNull<E>),
 {
@@ -218,7 +219,7 @@ impl<
         E: user::EntryT<K, V, Cid, Umeta>,
         K: ::std::hash::Hash + Clone + Eq,
         V,
-        Cid: Eq + Copy + Default,
+        Cid: crate::cid::Cid,
         Umeta: user::Meta<V>,
         Fscan: Sized + Fn(::std::ptr::NonNull<E>) + Copy,
         HB: ::std::hash::BuildHasher,
