@@ -149,15 +149,33 @@ impl<
             ._slru
             .insert_shared(&mut self._hmap, maybe_old_entry, &key)
         {
-            InsertResultShared::OldEntry(e) => {
-                InsertResult::OldEntry(e.deconstruct())
+            InsertResultShared::OldEntry { clash, evicted } => {
+                let c = match clash {
+                    None => None,
+                    Some(x) => Some(x.deconstruct()),
+                };
+                let e = match evicted {
+                    None => None,
+                    Some(x) => Some(x.deconstruct()),
+                };
+                InsertResult::OldEntry {
+                    clash: c,
+                    evicted: e,
+                }
             }
-            InsertResultShared::OldTail(tail) => {
-                InsertResult::OldTail(tail.deconstruct())
-            }
-            InsertResultShared::OldTailKey(tailkey) => {
-                let removed = self._hmap.remove(&tailkey).unwrap();
-                InsertResult::OldTail(removed.deconstruct())
+            InsertResultShared::OldTailPtr { clash, evicted } => {
+                let c = match clash {
+                    None => None,
+                    Some(x) => Some(x.deconstruct()),
+                };
+                let removed = self
+                    ._hmap
+                    .remove(unsafe { &*evicted.as_ptr() }.get_key())
+                    .unwrap();
+                InsertResult::OldTail {
+                    clash: c,
+                    evicted: removed.deconstruct(),
+                }
             }
             InsertResultShared::Success => InsertResult::Success,
         }
@@ -251,7 +269,7 @@ impl<
         hmap: &mut ::std::collections::HashMap<K, E, HB>,
         maybe_old_entry: Option<E>,
         key: &K,
-    ) -> InsertResultShared<E, K> {
+    ) -> InsertResultShared<E> {
         let just_inserted = hmap.get_mut(&key).unwrap();
         if just_inserted.get_cache_id() == self._probation.get_cache_id() {
             // inserted twice. promote to protected

@@ -148,7 +148,7 @@ impl<
         hmap: &mut ::std::collections::HashMap<K, E, HB>,
         maybe_old_entry: Option<E>,
         key: &K,
-    ) -> InsertResultShared<E, K> {
+    ) -> InsertResultShared<E> {
         let just_inserted = hmap.get_mut(&key).unwrap();
 
         match maybe_old_entry {
@@ -167,7 +167,7 @@ impl<
                     // put in window
                     match self._window.insert_shared(hmap, None, key) {
                         // if we have evicted, they are given a second chance
-                        InsertResultShared::OldTailKey(old_tail_key) => {
+                        InsertResultShared::OldTailPtr{clash, evicted} => {
                             // window eviction.
                             // TODO: check frequencies, see if we can insert on slru
                             InsertResultShared::Success
