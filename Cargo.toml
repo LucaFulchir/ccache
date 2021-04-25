@@ -12,5 +12,6 @@ description = "Window Tiny LFU implementation"
 thiserror = "1.0"
 bitfield = "0.13"
 bitvec = "0.21"
+hashbrown = "0.11"
 num-traits = "0.2"
 

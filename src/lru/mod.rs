@@ -32,7 +32,7 @@ where
     V: Sized,
     Umeta: user::Meta<V>,
 {
-    _hmap: ::std::collections::HashMap<K, LRUEntry<K, V, Umeta>, HB>,
+    _hmap: ::hashbrown::hash_map::HashMap<K, LRUEntry<K, V, Umeta>, HB>,
     _lru: LRUShared<
         LRUEntry<K, V, Umeta>,
         K,
@@ -56,7 +56,7 @@ impl<
         hash_builder: HB,
     ) -> LRU<K, V, Umeta, HB> {
         LRU {
-            _hmap: ::std::collections::HashMap::with_capacity_and_hasher(
+            _hmap: ::hashbrown::hash_map::HashMap::with_capacity_and_hasher(
                 1 + entries + extra_hashmap_capacity,
                 hash_builder,
             ),
@@ -245,7 +245,7 @@ impl<
     /// ols entry is part of the same cache
     pub fn insert_shared(
         &mut self,
-        hmap: &mut ::std::collections::HashMap<K, E, HB>,
+        hmap: &mut ::hashbrown::hash_map::HashMap<K, E, HB>,
         maybe_old_entry: Option<E>,
         key: &K,
     ) -> InsertResultShared<E> {

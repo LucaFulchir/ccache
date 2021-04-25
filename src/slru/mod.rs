@@ -14,8 +14,6 @@
  * limitations under the License.
  */
 
-use bitvec::access;
-
 use crate::results::{InsertResult, InsertResultShared};
 use crate::user;
 use crate::user::EntryT;
@@ -65,7 +63,7 @@ where
     Umeta: user::Meta<V>,
 {
     _hmap:
-        ::std::collections::HashMap<K, user::Entry<K, V, SLRUCid, Umeta>, HB>,
+        ::hashbrown::hash_map::HashMap<K, user::Entry<K, V, SLRUCid, Umeta>, HB>,
     _slru: SLRUShared<
         user::Entry<K, V, SLRUCid, Umeta>,
         K,
@@ -91,7 +89,7 @@ impl<
         hash_builder: HB,
     ) -> SLRU<K, V, Umeta, HB> {
         SLRU {
-            _hmap: ::std::collections::HashMap::with_capacity_and_hasher(
+            _hmap: ::hashbrown::hash_map::HashMap::with_capacity_and_hasher(
                 1 + probation_entries
                     + protected_entries
                     + extra_hashmap_capacity,
@@ -266,7 +264,7 @@ impl<
     }
     pub fn insert_shared(
         &mut self,
-        hmap: &mut ::std::collections::HashMap<K, E, HB>,
+        hmap: &mut ::hashbrown::hash_map::HashMap<K, E, HB>,
         maybe_old_entry: Option<E>,
         key: &K,
     ) -> InsertResultShared<E> {

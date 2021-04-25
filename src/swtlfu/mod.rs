@@ -145,7 +145,7 @@ impl<
     }
     pub fn insert_shared(
         &mut self,
-        hmap: &mut ::std::collections::HashMap<K, E, HB>,
+        hmap: &mut ::hashbrown::hash_map::HashMap<K, E, HB>,
         maybe_old_entry: Option<E>,
         key: &K,
     ) -> InsertResultShared<E> {
