@@ -276,14 +276,27 @@ impl<
             // Note that since we already found the key, we can not have had any
             // clash (maybe_old_entry == None)
             self._probation.remove_shared(just_inserted);
-            let res = self._protected.insert_shared(hmap, None, key);
+            let res = match self._protected.insert_shared(hmap, None, key) {
+                InsertResultShared::OldTailPtr { clash: _, evicted } => {
+                    // clash is always None
+                    // when an insert causes a tail eviction in the protected
+                    // segment, that has to be re-inserted in the probatory
+                    self._probation.insert_shared(
+                        hmap,
+                        None,
+                        unsafe { &*evicted.as_ptr() }.get_key(),
+                    )
+                }
+                r @ _ => r,
+            };
             self.update_scan_status();
             res
         } else if just_inserted.get_cache_id() == self._protected.get_cache_id()
         {
             // inserted more than once, in protected
             // Note that since we already found the key, we can not have had any
-            // clash (maybe_old_entry == None)
+            // clash (maybe_old_entry == None) and there will be no cache
+            // eviction
             let res = self._protected.insert_shared(hmap, None, key);
             self.update_scan_status();
             res
@@ -310,14 +323,29 @@ impl<
                         self.update_scan_status();
                         res
                     } else {
-                        // old_entry in protected
-                        // FIXME: we won't alert the user of the removal of
-                        //   old_entry!
-                        self._protected.remove_shared(&old_entry.into());
+                        self._protected.remove_shared(&old_entry);
                         let res =
                             self._probation.insert_shared(hmap, None, key);
                         self.update_scan_status();
-                        res
+                        match res {
+                            InsertResultShared::OldEntry {
+                                clash: _,
+                                evicted,
+                            } => InsertResultShared::OldEntry {
+                                clash: Some(old_entry),
+                                evicted: evicted,
+                            },
+                            InsertResultShared::OldTailPtr {
+                                clash: _,
+                                evicted,
+                            } => InsertResultShared::OldTailPtr {
+                                clash: Some(old_entry),
+                                evicted: evicted,
+                            },
+                            InsertResultShared::Success => {
+                                InsertResultShared::Success
+                            }
+                        }
                     }
                 }
             }
