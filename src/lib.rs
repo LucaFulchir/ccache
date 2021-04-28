@@ -19,5 +19,5 @@ pub mod lru;
 pub mod results;
 mod scan;
 pub mod slru;
-//pub mod swtlfu;
+pub mod swtlfu;
 pub mod user;
