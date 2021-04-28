@@ -29,7 +29,8 @@ type LRUEntry<K, V, Umeta> =
     user::Entry<K, V, ::std::marker::PhantomData<K>, Umeta>;
 pub struct LRU<K, V, Umeta, HB>
 where
-    V: Sized,
+    K: user::Hash,
+    V: user::Val,
     Umeta: user::Meta<V>,
 {
     _hmap: ::hashbrown::hash_map::HashMap<K, LRUEntry<K, V, Umeta>, HB>,
@@ -44,8 +45,8 @@ where
     >,
 }
 impl<
-        K: ::std::hash::Hash + Clone + Eq,
-        V,
+        K: user::Hash,
+        V: user::Val,
         Umeta: user::Meta<V>,
         HB: ::std::hash::BuildHasher,
     > LRU<K, V, Umeta, HB>
@@ -189,8 +190,9 @@ impl<
 pub struct LRUShared<E, K, V, Cid, Umeta, Fscan, HB>
 where
     E: user::EntryT<K, V, Cid, Umeta>,
-    V: Sized,
-    Cid: crate::cid::Cid,
+    K: crate::user::Hash,
+    V: crate::user::Val,
+    Cid: crate::user::Cid,
     Fscan: Sized + Fn(::std::ptr::NonNull<E>),
     Umeta: user::Meta<V>,
 {
@@ -209,9 +211,9 @@ where
 
 impl<
         E: user::EntryT<K, V, Cid, Umeta>,
-        K: ::std::hash::Hash + Clone + Eq,
-        V,
-        Cid: crate::cid::Cid,
+        K: user::Hash,
+        V: user::Val,
+        Cid: crate::user::Cid,
         Umeta: user::Meta<V>,
         Fscan: Fn(::std::ptr::NonNull<E>),
         HB: ::std::hash::BuildHasher,

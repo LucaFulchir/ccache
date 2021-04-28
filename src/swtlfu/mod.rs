@@ -18,7 +18,6 @@ mod counter;
 
 use crate::results::{InsertResult, InsertResultShared};
 use crate::user;
-use bitvec::prelude::*;
 
 /// TinyLFU is a series of counters and an SLRU cache.
 /// W-TinyLFU adds another LRU window in front of all of this.
@@ -55,8 +54,9 @@ use bitvec::prelude::*;
 pub struct SWTLFUShared<E, K, V, Cid, CidCtr, Umeta, Fscan, HB>
 where
     E: user::EntryT<K, V, CidCtr, Umeta>,
-    V: Sized,
-    Cid: crate::cid::Cid,
+    K: user::Hash,
+    V: user::Val,
+    Cid: user::Cid,
     CidCtr: counter::CidCounter<Cid>,
     Umeta: user::Meta<V>,
     Fscan: Sized + Copy + Fn(::std::ptr::NonNull<E>),
@@ -74,9 +74,9 @@ where
 
 impl<
         E: user::EntryT<K, V, CidCtr, Umeta>,
-        K: ::std::hash::Hash + Clone + Eq,
-        V,
-        Cid: crate::cid::Cid,
+        K: user::Hash,
+        V: user::Val,
+        Cid: user::Cid,
         CidCtr: counter::CidCounter<Cid>,
         Umeta: user::Meta<V>,
         Fscan: Sized + Copy + Fn(::std::ptr::NonNull<E>),

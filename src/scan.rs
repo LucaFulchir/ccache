@@ -17,9 +17,9 @@ use crate::user;
 
 pub struct Scan<
     E: user::EntryT<K, V, Cid, Umeta>,
-    K,
-    V,
-    Cid,
+    K: user::Hash,
+    V: user::Val,
+    Cid: user::Cid,
     Umeta: user::Meta<V>,
     F: Fn(::std::ptr::NonNull<E>),
 > {
@@ -33,9 +33,9 @@ pub struct Scan<
 
 impl<
         E: user::EntryT<K, V, Cid, Umeta>,
-        K,
-        V,
-        Cid,
+        K: user::Hash,
+        V: user::Val,
+        Cid: user::Cid,
         Umeta: user::Meta<V>,
         F: Fn(::std::ptr::NonNull<E>),
     > Scan<E, K, V, Cid, Umeta, F>
@@ -104,7 +104,10 @@ impl<
 pub fn null_scan<E, K, V, Cid, Umeta>(_entry: ::std::ptr::NonNull<E>)
 where
     E: crate::user::EntryT<K, V, Cid, Umeta>,
-    Umeta: crate::user::Meta<V>,
+    K: user::Hash,
+    V: user::Val,
+    Cid: user::Cid,
+    Umeta: user::Meta<V>,
 {
     // do nothing
 }

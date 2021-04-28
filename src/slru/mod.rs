@@ -51,7 +51,7 @@ impl Default for SLRUCid {
         SLRUCid::None(SLRUCidNone::default())
     }
 }
-impl crate::cid::Cid for SLRUCid {}
+impl user::Cid for SLRUCid {}
 
 /// SLRU ( https://en.wikipedia.org/wiki/Cache_replacement_policies#Segmented_LRU_(SLRU) )
 /// is a Segmented LRU it consists of two LRU:
@@ -60,10 +60,15 @@ impl crate::cid::Cid for SLRUCid {}
 /// W-TinyLRU specifies an 20-80 split, with 80% for the probation LRU
 pub struct SLRU<K, V, Umeta, HB>
 where
+    K: user::Hash,
+    V: user::Val,
     Umeta: user::Meta<V>,
 {
-    _hmap:
-        ::hashbrown::hash_map::HashMap<K, user::Entry<K, V, SLRUCid, Umeta>, HB>,
+    _hmap: ::hashbrown::hash_map::HashMap<
+        K,
+        user::Entry<K, V, SLRUCid, Umeta>,
+        HB,
+    >,
     _slru: SLRUShared<
         user::Entry<K, V, SLRUCid, Umeta>,
         K,
@@ -76,8 +81,8 @@ where
 }
 
 impl<
-        K: ::std::hash::Hash + Clone + Eq,
-        V,
+        K: user::Hash,
+        V: user::Val,
         Umeta: user::Meta<V>,
         HB: ::std::hash::BuildHasher,
     > SLRU<K, V, Umeta, HB>
@@ -221,8 +226,9 @@ enum ScanStatus {
 pub struct SLRUShared<E, K, V, Cid, Umeta, Fscan, HB>
 where
     E: user::EntryT<K, V, Cid, Umeta>,
-    V: Sized,
-    Cid: crate::cid::Cid,
+    K: user::Hash,
+    V: user::Val,
+    Cid: user::Cid,
     Umeta: user::Meta<V>,
     Fscan: Sized + Fn(::std::ptr::NonNull<E>),
 {
@@ -233,9 +239,9 @@ where
 
 impl<
         E: user::EntryT<K, V, Cid, Umeta>,
-        K: ::std::hash::Hash + Clone + Eq,
-        V,
-        Cid: crate::cid::Cid,
+        K: user::Hash,
+        V: user::Val,
+        Cid: user::Cid,
         Umeta: user::Meta<V>,
         Fscan: Sized + Fn(::std::ptr::NonNull<E>) + Copy,
         HB: ::std::hash::BuildHasher,

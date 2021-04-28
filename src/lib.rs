@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-pub mod cid;
+pub mod hashmap;
 pub mod lru;
 pub mod results;
 mod scan;

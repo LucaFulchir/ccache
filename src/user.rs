@@ -14,9 +14,15 @@
  * limitations under the License.
  */
 
+pub trait Hash: Sized + Clone + ::std::hash::Hash + Eq + Default {}
+pub trait Val: Sized + Default {}
+pub trait Cid: Eq + Copy + Clone + Default {}
+
+impl<T> Cid for ::std::marker::PhantomData<T> {}
+
 /// The trait UserMeta defines operations that will be run on certain operations
 /// of the LRU
-pub trait Meta<V> {
+pub trait Meta<V>: Default {
     /// create a new metadata struct with default values
     /// used if you don't want to specify one on insert(...)
     fn new() -> Self
@@ -40,6 +46,7 @@ pub trait Meta<V> {
 
 /// The simplest of implementation for metadata:
 /// No metadata, don't take up space and don't  do anything
+#[derive(Default)]
 pub struct ZeroMeta {}
 
 impl<V> Meta<V> for ZeroMeta {
@@ -56,8 +63,11 @@ impl<V> Meta<V> for ZeroMeta {
 }
 // TODO: make 'head' and 'tail' typesafe.
 // Does this require a full reimplementation of all pointer operations?
-pub trait EntryT<K, V, Cid, Umeta>
+pub trait EntryT<K, V, Cid, Umeta>: Default
 where
+    K: Default,
+    V: Val,
+    Cid: crate::user::Cid,
     Umeta: Meta<V>,
     Self: Sized,
 {
@@ -91,6 +101,11 @@ where
 
     fn user_on_insert(&mut self, old_entry: Option<&mut Self>);
     fn user_on_get(&mut self);
+
+    /*
+    unsafe fn from_val(val: &V) -> &Self;
+    unsafe fn from_val_mut(val: &mut V) -> &mut Self;
+    */
 }
 
 pub struct Entry<K, V, Cid, Umeta>
@@ -107,10 +122,30 @@ where
     val: V,
     user_data: Umeta,
 }
+impl<K, V, Cid, Umeta: Meta<V>> Default for Entry<K, V, Cid, Umeta>
+where
+    K: Hash,
+    V: Val,
+    Cid: crate::user::Cid,
+{
+    fn default() -> Self {
+        Entry {
+            cache_id: Cid::default(),
+            ll_head: None,
+            ll_tail: None,
+            key: K::default(),
+            val: V::default(),
+            user_data: Umeta::default(),
+        }
+    }
+}
+
 impl<K, V, Cid, Umeta: Meta<V>> EntryT<K, V, Cid, Umeta>
     for Entry<K, V, Cid, Umeta>
 where
-    Cid: Copy,
+    K: Hash,
+    V: Val,
+    Cid: crate::user::Cid,
 {
     fn new_entry(
         head: Option<::std::ptr::NonNull<Self>>,
