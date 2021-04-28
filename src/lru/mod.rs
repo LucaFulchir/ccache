@@ -19,13 +19,6 @@ use crate::results::{InsertResult, InsertResultShared};
 use crate::user;
 use crate::user::EntryT;
 
-/// LRU implementation that wraps LRUShared
-/// note that we store the value as-is and we have pointers to those,
-/// so **if you need to grow the LRU dynamically, make sure to use `Box<V>
-/// as the value**
-// TODO: generalize: K in the first Hashmap template parameter is not
-// necessarily the same K in the user::Entry<K>
-// (e.g: could be a pointer to user::Entry<K>.key)
 type LRUEntry<K, V, Umeta> =
     user::Entry<K, V, ::std::marker::PhantomData<K>, Umeta>;
 type HmapT<K, V, Umeta, HB> = hashmap::SimpleHmap<
@@ -36,6 +29,13 @@ type HmapT<K, V, Umeta, HB> = hashmap::SimpleHmap<
     Umeta,
     HB,
 >;
+/// LRU implementation that wraps LRUShared
+/// note that we store the value as-is and we have pointers to those,
+/// so **if you need to grow the LRU dynamically, make sure to use `Box<V>
+/// as the value**
+// TODO: generalize: K in the first Hashmap template parameter is not
+// necessarily the same K in the user::Entry<K>
+// (e.g: could be a pointer to user::Entry<K>.key)
 pub struct LRU<K, V, Umeta, HB>
 where
     K: user::Hash,
@@ -115,11 +115,11 @@ impl<
         // insert and get length and a ref to the value just inserted
         // we will use this ref to fix the linked lists in ll_tail/ll_head
         // of the various elements
-        let (maybe_clash, inserted_idx, _inserted) = self._hmap.insert(e);
+        let (maybe_clash, new_entry_idx, _new_entry) = self._hmap.insert(e);
         match self._lru.insert_shared(
             &mut self._hmap,
             maybe_clash,
-            inserted_idx,
+            new_entry_idx,
         ) {
             InsertResultShared::OldEntry { clash, evicted } => {
                 let c = match clash {
@@ -196,13 +196,13 @@ impl<
         }
     }
 }
-pub struct LRUShared<Hmap, E, K, V, Cid, Umeta, Fscan, HB>
+pub struct LRUShared<Hmap, E, K, V, CidT: user::Cid, Umeta, Fscan, HB>
 where
-    Hmap: hashmap::HashMap<E, K, V, Cid, Umeta, HB>,
-    E: user::EntryT<K, V, Cid, Umeta>,
-    K: crate::user::Hash,
-    V: crate::user::Val,
-    Cid: crate::user::Cid,
+    Hmap: hashmap::HashMap<E, K, V, CidT, Umeta, HB>,
+    E: user::EntryT<K, V, CidT, Umeta>,
+    K: user::Hash,
+    V: user::Val,
+    CidT: user::Cid,
     Fscan: Sized + Fn(::std::ptr::NonNull<E>),
     Umeta: user::Meta<V>,
     HB: ::std::hash::BuildHasher + Default,
@@ -212,25 +212,25 @@ where
 
     _head: Option<::std::ptr::NonNull<E>>,
     _tail: Option<::std::ptr::NonNull<E>>,
-    _cache_id: Cid,
+    _cache_id: CidT,
     _hmap: ::std::marker::PhantomData<Hmap>,
     _key: ::std::marker::PhantomData<K>,
     _val: ::std::marker::PhantomData<V>,
     _meta: ::std::marker::PhantomData<Umeta>,
     _hashbuilder: ::std::marker::PhantomData<HB>,
-    _scan: crate::scan::Scan<E, K, V, Cid, Umeta, Fscan>,
+    _scan: crate::scan::Scan<E, K, V, CidT, Umeta, Fscan>,
 }
 
 impl<
-        Hmap: hashmap::HashMap<E, K, V, Cid, Umeta, HB>,
-        E: user::EntryT<K, V, Cid, Umeta>,
+        Hmap: hashmap::HashMap<E, K, V, CidT, Umeta, HB>,
+        E: user::EntryT<K, V, CidT, Umeta>,
         K: user::Hash,
         V: user::Val,
-        Cid: crate::user::Cid,
+        CidT: user::Cid,
         Umeta: user::Meta<V>,
         Fscan: Fn(::std::ptr::NonNull<E>),
         HB: ::std::hash::BuildHasher + Default,
-    > LRUShared<Hmap, E, K, V, Cid, Umeta, Fscan, HB>
+    > LRUShared<Hmap, E, K, V, CidT, Umeta, Fscan, HB>
 {
     /// Build a LRU that works on someone else's hasmap
     /// In this case each cache should have a different `Cid` (Cache ID) so that
@@ -238,9 +238,9 @@ impl<
     /// cache methods
     pub fn new(
         entries: usize,
-        cache_id: Cid,
+        cache_id: CidT,
         access_scan: Fscan,
-    ) -> LRUShared<Hmap, E, K, V, Cid, Umeta, Fscan, HB> {
+    ) -> LRUShared<Hmap, E, K, V, CidT, Umeta, Fscan, HB> {
         LRUShared {
             _capacity: entries,
             _used: 0,
@@ -513,7 +513,7 @@ impl<
             }
         }
     }
-    pub fn get_cache_id(&self) -> Cid {
+    pub fn get_cache_id(&self) -> CidT {
         self._cache_id
     }
     pub fn on_get(&mut self, entry: &mut E) {

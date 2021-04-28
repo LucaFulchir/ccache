@@ -18,6 +18,6 @@ pub mod hashmap;
 pub mod lru;
 pub mod results;
 mod scan;
-//pub mod slru;
+pub mod slru;
 //pub mod swtlfu;
 pub mod user;

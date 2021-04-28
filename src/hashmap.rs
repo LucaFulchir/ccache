@@ -48,6 +48,8 @@ where
     fn get_index(&self, idx: usize) -> Option<&Entry>;
     /// Return a reference to the object at the given index, if any
     fn get_index_mut(&mut self, idx: usize) -> Option<&mut Entry>;
+    /// Get a ref to an Entry and translate it to an index
+    unsafe fn index_from_entry(&self, e: &Entry) -> usize;
     /// Remove and ojbect.
     /// Returns the removed object
     /// Must not reshuffle after removal
@@ -235,6 +237,9 @@ where
         }
         Some(unsafe { bucket.as_mut() })
     }
+    unsafe fn index_from_entry(&self, e: &Entry) -> usize {
+        self.entry_to_idx(e)
+    }
     fn entry_to_idx(&self, e: &Entry) -> usize {
         unsafe {
             // basically copied from the ::hashbrown::raw::Bucket implementation
@@ -378,6 +383,9 @@ where
     }
     fn get_index_mut(&mut self, idx: usize) -> Option<&mut Entry> {
         SimpleHmap::get_index_mut(self, idx)
+    }
+    unsafe fn index_from_entry(&self, e: &Entry) -> usize {
+        SimpleHmap::index_from_entry(self, e)
     }
     fn remove(&mut self, item: &Entry) -> Entry {
         SimpleHmap::remove(self, item)

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use crate::hashmap;
 use crate::results::{InsertResult, InsertResultShared};
 use crate::user;
 use crate::user::EntryT;
@@ -53,6 +54,10 @@ impl Default for SLRUCid {
 }
 impl user::Cid for SLRUCid {}
 
+type SLRUEntry<K, V, Umeta> = user::Entry<K, V, SLRUCid, Umeta>;
+type HmapT<K, V, Umeta, HB> =
+    hashmap::SimpleHmap<SLRUEntry<K, V, Umeta>, K, V, SLRUCid, Umeta, HB>;
+
 /// SLRU ( https://en.wikipedia.org/wiki/Cache_replacement_policies#Segmented_LRU_(SLRU) )
 /// is a Segmented LRU it consists of two LRU:
 ///  * probation LRU: for items that have been just added
@@ -63,14 +68,12 @@ where
     K: user::Hash,
     V: user::Val,
     Umeta: user::Meta<V>,
+    HB: ::std::hash::BuildHasher + Default,
 {
-    _hmap: ::hashbrown::hash_map::HashMap<
-        K,
-        user::Entry<K, V, SLRUCid, Umeta>,
-        HB,
-    >,
+    _hmap: HmapT<K, V, Umeta, HB>,
     _slru: SLRUShared<
-        user::Entry<K, V, SLRUCid, Umeta>,
+        HmapT<K, V, Umeta, HB>,
+        SLRUEntry<K, V, Umeta>,
         K,
         V,
         SLRUCid,
@@ -84,7 +87,7 @@ impl<
         K: user::Hash,
         V: user::Val,
         Umeta: user::Meta<V>,
-        HB: ::std::hash::BuildHasher,
+        HB: ::std::hash::BuildHasher + Default,
     > SLRU<K, V, Umeta, HB>
 {
     pub fn new(
@@ -94,19 +97,20 @@ impl<
         hash_builder: HB,
     ) -> SLRU<K, V, Umeta, HB> {
         SLRU {
-            _hmap: ::hashbrown::hash_map::HashMap::with_capacity_and_hasher(
+            _hmap: HmapT::<K, V, Umeta, HB>::with_capacity_and_hasher(
                 1 + probation_entries
                     + protected_entries
                     + extra_hashmap_capacity,
                 hash_builder,
             ),
             _slru: SLRUShared::<
-                user::Entry<K, V, SLRUCid, Umeta>,
+                HmapT<K, V, Umeta, HB>,
+                SLRUEntry<K, V, Umeta>,
                 K,
                 V,
                 SLRUCid,
                 Umeta,
-                fn(::std::ptr::NonNull<user::Entry<K, V, SLRUCid, Umeta>>),
+                fn(::std::ptr::NonNull<SLRUEntry<K, V, Umeta>>),
                 HB,
             >::new(
                 (
@@ -118,7 +122,7 @@ impl<
                     SLRUCid::Protected(SLRUCidProtected::default()),
                 ),
                 crate::scan::null_scan::<
-                    user::Entry<K, V, SLRUCid, Umeta>,
+                    SLRUEntry<K, V, Umeta>,
                     K,
                     V,
                     SLRUCid,
@@ -147,11 +151,12 @@ impl<
         // insert and get length and a ref to the value just inserted
         // we will use this ref to fix the linked lists in ll_tail/ll_head
         // of the various elements
-        let maybe_old_entry = self._hmap.insert(key.clone(), e);
-        match self
-            ._slru
-            .insert_shared(&mut self._hmap, maybe_old_entry, &key)
-        {
+        let (maybe_old_entry, new_entry_idx, _new_entry) = self._hmap.insert(e);
+        match self._slru.insert_shared(
+            &mut self._hmap,
+            maybe_old_entry,
+            new_entry_idx,
+        ) {
             InsertResultShared::OldEntry { clash, evicted } => {
                 let c = match clash {
                     None => None,
@@ -171,10 +176,7 @@ impl<
                     None => None,
                     Some(x) => Some(x.deconstruct()),
                 };
-                let removed = self
-                    ._hmap
-                    .remove(unsafe { &*evicted.as_ptr() }.get_key())
-                    .unwrap();
+                let removed = self._hmap.remove(unsafe { &*evicted.as_ptr() });
                 InsertResult::OldTail {
                     clash: c,
                     evicted: removed.deconstruct(),
@@ -185,32 +187,31 @@ impl<
     }
 
     pub fn remove(&mut self, key: &K) -> Option<(V, Umeta)> {
-        match self._hmap.remove(key) {
-            None => None,
-            Some(entry) => {
-                self._slru.remove_shared(&entry);
-                let (_, val, meta) = entry.deconstruct();
-                Some((val, meta))
-            }
-        }
+        let (idx, entry) = match self._hmap.get_full(key) {
+            None => return None,
+            Some((idx, entry)) => (idx, entry),
+        };
+        self._slru.remove_shared(entry);
+        let (_, val, meta) = self._hmap.remove_idx(idx).deconstruct();
+        Some((val, meta))
     }
     pub fn clear(&mut self) {
         self._hmap.clear();
         self._slru.clear_shared()
     }
     pub fn get(&mut self, key: &K) -> Option<(&V, &Umeta)> {
-        match self._hmap.get_mut(key) {
+        match self._hmap.get_full_mut(key) {
             None => None,
-            Some(entry) => {
+            Some((_, entry)) => {
                 self._slru.on_get(entry);
                 Some((entry.get_val(), entry.get_user()))
             }
         }
     }
     pub fn get_mut(&mut self, key: &K) -> Option<(&mut V, &mut Umeta)> {
-        match self._hmap.get_mut(key) {
+        match self._hmap.get_full_mut(key) {
             None => None,
-            Some(entry) => {
+            Some((_, entry)) => {
                 self._slru.on_get(entry);
                 Some(entry.get_val_user_mut())
             }
@@ -223,73 +224,90 @@ enum ScanStatus {
     RunningProbation,
     RunningProtected,
 }
-pub struct SLRUShared<E, K, V, Cid, Umeta, Fscan, HB>
+pub struct SLRUShared<Hmap, E, K, V, CidT, Umeta, Fscan, HB>
 where
-    E: user::EntryT<K, V, Cid, Umeta>,
+    Hmap: hashmap::HashMap<E, K, V, CidT, Umeta, HB>,
+    E: user::EntryT<K, V, CidT, Umeta>,
     K: user::Hash,
     V: user::Val,
-    Cid: user::Cid,
+    CidT: user::Cid,
     Umeta: user::Meta<V>,
     Fscan: Sized + Fn(::std::ptr::NonNull<E>),
+    HB: ::std::hash::BuildHasher + Default,
 {
-    _probation: crate::lru::LRUShared<E, K, V, Cid, Umeta, Fscan, HB>,
-    _protected: crate::lru::LRUShared<E, K, V, Cid, Umeta, Fscan, HB>,
+    _probation: crate::lru::LRUShared<Hmap, E, K, V, CidT, Umeta, Fscan, HB>,
+    _protected: crate::lru::LRUShared<Hmap, E, K, V, CidT, Umeta, Fscan, HB>,
     _scanstatus: ScanStatus,
 }
 
 impl<
-        E: user::EntryT<K, V, Cid, Umeta>,
+        Hmap: hashmap::HashMap<E, K, V, CidT, Umeta, HB>,
+        E: user::EntryT<K, V, CidT, Umeta>,
         K: user::Hash,
         V: user::Val,
-        Cid: user::Cid,
+        CidT: user::Cid,
         Umeta: user::Meta<V>,
         Fscan: Sized + Fn(::std::ptr::NonNull<E>) + Copy,
-        HB: ::std::hash::BuildHasher,
-    > SLRUShared<E, K, V, Cid, Umeta, Fscan, HB>
+        HB: ::std::hash::BuildHasher + Default,
+    > SLRUShared<Hmap, E, K, V, CidT, Umeta, Fscan, HB>
 {
     pub fn new(
-        probation: (usize, Cid),
-        protected: (usize, Cid),
+        probation: (usize, CidT),
+        protected: (usize, CidT),
         access_scan: Fscan,
-    ) -> SLRUShared<E, K, V, Cid, Umeta, Fscan, HB> {
+    ) -> SLRUShared<Hmap, E, K, V, CidT, Umeta, Fscan, HB> {
         SLRUShared {
-            _probation:
-                crate::lru::LRUShared::<E, K, V, Cid, Umeta, Fscan, HB>::new(
-                    probation.0,
-                    probation.1,
-                    access_scan.clone(),
-                ),
-            _protected:
-                crate::lru::LRUShared::<E, K, V, Cid, Umeta, Fscan, HB>::new(
-                    protected.0,
-                    protected.1,
-                    access_scan,
-                ),
+            _probation: crate::lru::LRUShared::<
+                Hmap,
+                E,
+                K,
+                V,
+                CidT,
+                Umeta,
+                Fscan,
+                HB,
+            >::new(
+                probation.0, probation.1, access_scan.clone()
+            ),
+            _protected: crate::lru::LRUShared::<
+                Hmap,
+                E,
+                K,
+                V,
+                CidT,
+                Umeta,
+                Fscan,
+                HB,
+            >::new(
+                protected.0, protected.1, access_scan
+            ),
             _scanstatus: ScanStatus::Stopped,
         }
     }
     pub fn insert_shared(
         &mut self,
-        hmap: &mut ::hashbrown::hash_map::HashMap<K, E, HB>,
+        hmap: &mut Hmap,
         maybe_old_entry: Option<E>,
-        key: &K,
+        new_entry_idx: usize,
     ) -> InsertResultShared<E> {
-        let just_inserted = hmap.get_mut(&key).unwrap();
+        let just_inserted = hmap.get_index_mut(new_entry_idx).unwrap();
         if just_inserted.get_cache_id() == self._probation.get_cache_id() {
             // inserted twice. promote to protected
             // Note that since we already found the key, we can not have had any
             // clash (maybe_old_entry == None)
             self._probation.remove_shared(just_inserted);
-            let res = match self._protected.insert_shared(hmap, None, key) {
+            let res = match self._protected.insert_shared(
+                hmap,
+                None,
+                new_entry_idx,
+            ) {
                 InsertResultShared::OldTailPtr { clash: _, evicted } => {
                     // clash is always None
                     // when an insert causes a tail eviction in the protected
                     // segment, that has to be re-inserted in the probatory
-                    self._probation.insert_shared(
-                        hmap,
-                        None,
-                        unsafe { &*evicted.as_ptr() }.get_key(),
-                    )
+                    self._probation.insert_shared(hmap, None, unsafe {
+                        hmap.index_from_entry(&*evicted.as_ptr())
+                    })
                 }
                 r @ _ => r,
             };
@@ -301,14 +319,16 @@ impl<
             // Note that since we already found the key, we can not have had any
             // clash (maybe_old_entry == None) and there will be no cache
             // eviction
-            let res = self._protected.insert_shared(hmap, None, key);
+            let res = self._protected.insert_shared(hmap, None, new_entry_idx);
             self.update_scan_status();
             res
         } else {
             // new insert, not in any cache.
             // We might have had a clash, but we will insert into probation
             match maybe_old_entry {
-                None => self._probation.insert_shared(hmap, None, key),
+                None => {
+                    self._probation.insert_shared(hmap, None, new_entry_idx)
+                }
                 Some(old_entry) => {
                     // old_entry might be either in probation or protected.
                     // But the only way for us to have an "old_entry" instead of
@@ -322,14 +342,17 @@ impl<
                         let res = self._probation.insert_shared(
                             hmap,
                             Some(old_entry),
-                            key,
+                            new_entry_idx,
                         );
                         self.update_scan_status();
                         res
                     } else {
                         self._protected.remove_shared(&old_entry);
-                        let res =
-                            self._probation.insert_shared(hmap, None, key);
+                        let res = self._probation.insert_shared(
+                            hmap,
+                            None,
+                            new_entry_idx,
+                        );
                         self.update_scan_status();
                         match res {
                             InsertResultShared::OldEntry {
@@ -369,7 +392,7 @@ impl<
         self.update_scan_status();
         res
     }
-    pub fn get_cache_ids(&self) -> (Cid, Cid) {
+    pub fn get_cache_ids(&self) -> (CidT, CidT) {
         (
             self._probation.get_cache_id(),
             self._protected.get_cache_id(),
