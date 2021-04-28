@@ -15,9 +15,6 @@
  */
 use std::hash::Hasher;
 
-/// Used for try_insert
-type Result<T> = ::std::result::Result<T, ()>;
-
 /// Use this trait to wrap your hashmap implementation
 /// We need this since the stdlib does not implement the methods
 /// This will be all used in a single-thread context
@@ -53,23 +50,28 @@ where
     fn get_index_mut(&mut self, idx: usize) -> Option<&mut Entry>;
     /// Remove and ojbect.
     /// Returns the removed object
-    /// Most not reshuffle after removal
-    fn remove(&mut self, item: Entry) -> Entry;
+    /// Must not reshuffle after removal
+    fn remove(&mut self, item: &Entry) -> Entry;
+    /// Remove and ojbect at idx.
+    /// Returns the removed object
+    /// If no object was present, return a default object
+    /// Must not reshuffle after removal
+    fn remove_idx(&mut self, idx: usize) -> Entry;
     /// Remove all objects in the hashmap
     fn clear(&mut self);
     /// Insert a new element in the hashmap.
-    /// Returns a pair with a possible clash `Option<V>` and a reference
-    /// to the object just inserted
+    /// Returns a pair with a possible clash `Option<V>` plus the index and the
+    /// reference to the object just inserted
     /// Must not reshuffle or reallocate
-    fn try_insert(&mut self, entry: Entry) -> Result<(Option<Entry>, &Entry)>;
+    fn insert(&mut self, entry: Entry) -> (Option<Entry>, usize, &Entry);
     /// Insert a new element in the hashmap.
-    /// Returns a pair with a possible clash `Option<V>` and a mutable reference
-    /// to the object just inserted
+    /// Returns a pair with a possible clash `Option<V>` plus the index and the
+    /// mutable reference to the object just inserted
     /// Must not reshuffle or reallocate
-    fn try_insert_mut(
+    fn insert_mut(
         &mut self,
         entry: Entry,
-    ) -> Result<(Option<Entry>, &mut Entry)>;
+    ) -> (Option<Entry>, usize, &mut Entry);
     /// returns a reference to the current hasher
     fn hasher(&self) -> &BuildHasher;
 }
@@ -94,7 +96,7 @@ where
 ///   marker in the hash_map
 /// * Cid need the default type which is used by EntryT to mark "empty-space"
 // TODO: add allocator
-struct SimpleHmap<
+pub struct SimpleHmap<
     Entry,
     Key,
     Val,
@@ -189,8 +191,7 @@ where
     fn hash(&self, key: &Key) -> u64 {
         let mut hasher = self.hash_builder.build_hasher();
         key.hash(&mut hasher);
-        // Yes, we clash a lot with the modulus. it's intended.
-        hasher.finish() % (self.capacity() as u64)
+        hasher.finish()
     }
     pub fn get_full(&self, key: &Key) -> Option<(usize, &Entry)> {
         let hash = self.hash(key);
@@ -244,8 +245,20 @@ where
     }
     /// just mark the entry as not part of a `Cid` and return a copy
     /// don't bother actually deleting the data
-    pub fn remove(&mut self, item: Entry) -> Entry {
-        let idx = self.entry_to_idx(&item);
+    pub fn remove(&mut self, item: &Entry) -> Entry {
+        let idx = self.entry_to_idx(item);
+        self.remove_idx_unsafe(idx)
+    }
+    /// just mark the entry as not part of a `Cid` and return a copy
+    /// don't bother actually deleting the data
+    /// If not present, return a default `Entry`
+    pub fn remove_idx(&mut self, idx: usize) -> Entry {
+        if idx >= self.capacity() {
+            return Entry::default();
+        }
+        self.remove_idx_unsafe(idx)
+    }
+    fn remove_idx_unsafe(&mut self, idx: usize) -> Entry {
         unsafe {
             let bucket = self.table.bucket(idx);
             if bucket.as_ref().get_cache_id() == Cid::default() {
@@ -264,26 +277,18 @@ where
     /// returns: any eventual clash in `Option<Entry>` plus the index and a ref
     /// to the actual entry.
     /// If the hashmap is full and we can not insert the element, returns Err
-    pub fn try_insert(
-        &mut self,
-        entry: Entry,
-    ) -> Result<(Option<Entry>, &Entry)> {
-        match self.try_insert_mut(entry) {
-            Ok((opt_clash, res)) => Ok((opt_clash, res)),
-            Err(_) => Err(()),
-        }
+    pub fn insert(&mut self, entry: Entry) -> (Option<Entry>, usize, &Entry) {
+        let (clash, idx, entry) = self.insert_mut(entry);
+        (clash, idx, entry)
     }
-    pub fn try_insert_mut(
+    pub fn insert_mut(
         &mut self,
         entry: Entry,
-    ) -> Result<(Option<Entry>, &mut Entry)> {
-        if self.usage == self.capacity() {
-            return Err(());
-        }
+    ) -> (Option<Entry>, usize, &mut Entry) {
         self.usage += 1;
         let hash = self.hash(entry.get_key());
         let non_mut_self = &*self;
-        let opt_clash = self.table.find(hash, move |x| {
+        let opt_clash_strong = self.table.find(hash, move |x| {
             if (&x).get_cache_id() == Cid::default() {
                 return true;
             }
@@ -291,19 +296,46 @@ where
             let h2 = non_mut_self.hash(k);
             hash.eq(&h2)
         });
-        match opt_clash {
+        let opt_clash_real =
+            if opt_clash_strong.is_none() && (self.usage == self.capacity()) {
+                // hashmap is full, but we did not find a clash.
+                // since we always guarantee an insert, let's weaken the hash
+                // and force a clash
+                let weak_hash = hash % (self.capacity() as u64);
+                self.table.find(weak_hash, move |x| {
+                    if (&x).get_cache_id() == Cid::default() {
+                        return true;
+                    }
+                    let k = x.get_key();
+                    let h2 =
+                        non_mut_self.hash(k) % (non_mut_self.capacity() as u64);
+                    weak_hash.eq(&h2)
+                })
+            } else {
+                opt_clash_strong
+            };
+        let (opt_clash_copy, bucket) = match opt_clash_real {
             None => {
                 let bucket = self.table.insert_no_grow(hash, entry);
-                Ok((None, unsafe { bucket.as_mut() }))
+                let bucket_idx = unsafe { self.table.bucket_index(&bucket) };
+                return (None, bucket_idx, unsafe { bucket.as_mut() });
             }
-            Some(clash) => {
-                let old_element = unsafe { clash.read() };
-                unsafe {
-                    clash.write(entry);
-                }
-                Ok((Some(old_element), unsafe { clash.as_mut() }))
+            Some(bucket) => {
+                let old_element = if unsafe { bucket.as_ref() }.get_cache_id()
+                    == Cid::default()
+                {
+                    None
+                } else {
+                    Some(unsafe { bucket.read() })
+                };
+                (old_element, bucket)
             }
+        };
+        unsafe {
+            bucket.write(entry);
         }
+        let bucket_idx = unsafe { self.table.bucket_index(&bucket) };
+        (opt_clash_copy, bucket_idx, unsafe { bucket.as_mut() })
     }
     pub fn hasher(&self) -> &BuildHasher {
         &self.hash_builder
@@ -347,20 +379,23 @@ where
     fn get_index_mut(&mut self, idx: usize) -> Option<&mut Entry> {
         SimpleHmap::get_index_mut(self, idx)
     }
-    fn remove(&mut self, item: Entry) -> Entry {
+    fn remove(&mut self, item: &Entry) -> Entry {
         SimpleHmap::remove(self, item)
+    }
+    fn remove_idx(&mut self, idx: usize) -> Entry {
+        SimpleHmap::remove_idx(self, idx)
     }
     fn clear(&mut self) {
         SimpleHmap::clear(self)
     }
-    fn try_insert(&mut self, entry: Entry) -> Result<(Option<Entry>, &Entry)> {
-        SimpleHmap::try_insert(self, entry)
+    fn insert(&mut self, entry: Entry) -> (Option<Entry>, usize, &Entry) {
+        SimpleHmap::insert(self, entry)
     }
-    fn try_insert_mut(
+    fn insert_mut(
         &mut self,
         entry: Entry,
-    ) -> Result<(Option<Entry>, &mut Entry)> {
-        SimpleHmap::try_insert_mut(self, entry)
+    ) -> (Option<Entry>, usize, &mut Entry) {
+        SimpleHmap::insert_mut(self, entry)
     }
     fn hasher(&self) -> &BuildHasher {
         SimpleHmap::hasher(self)

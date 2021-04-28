@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use crate::hashmap;
 use crate::results::{InsertResult, InsertResultShared};
 use crate::user;
 use crate::user::EntryT;
@@ -27,14 +28,24 @@ use crate::user::EntryT;
 // (e.g: could be a pointer to user::Entry<K>.key)
 type LRUEntry<K, V, Umeta> =
     user::Entry<K, V, ::std::marker::PhantomData<K>, Umeta>;
+type HmapT<K, V, Umeta, HB> = hashmap::SimpleHmap<
+    LRUEntry<K, V, Umeta>,
+    K,
+    V,
+    ::std::marker::PhantomData<K>,
+    Umeta,
+    HB,
+>;
 pub struct LRU<K, V, Umeta, HB>
 where
     K: user::Hash,
     V: user::Val,
     Umeta: user::Meta<V>,
+    HB: ::std::hash::BuildHasher + Default,
 {
-    _hmap: ::hashbrown::hash_map::HashMap<K, LRUEntry<K, V, Umeta>, HB>,
+    _hmap: HmapT<K, V, Umeta, HB>,
     _lru: LRUShared<
+        HmapT<K, V, Umeta, HB>,
         LRUEntry<K, V, Umeta>,
         K,
         V,
@@ -48,7 +59,7 @@ impl<
         K: user::Hash,
         V: user::Val,
         Umeta: user::Meta<V>,
-        HB: ::std::hash::BuildHasher,
+        HB: ::std::hash::BuildHasher + Default,
     > LRU<K, V, Umeta, HB>
 {
     pub fn new(
@@ -57,11 +68,12 @@ impl<
         hash_builder: HB,
     ) -> LRU<K, V, Umeta, HB> {
         LRU {
-            _hmap: ::hashbrown::hash_map::HashMap::with_capacity_and_hasher(
+            _hmap: HmapT::<K, V, Umeta, HB>::with_capacity_and_hasher(
                 1 + entries + extra_hashmap_capacity,
                 hash_builder,
             ),
             _lru: LRUShared::<
+                HmapT<K, V, Umeta, HB>,
                 LRUEntry<K, V, Umeta>,
                 K,
                 V,
@@ -103,11 +115,12 @@ impl<
         // insert and get length and a ref to the value just inserted
         // we will use this ref to fix the linked lists in ll_tail/ll_head
         // of the various elements
-        let maybe_old_entry = self._hmap.insert(key.clone(), e);
-        match self
-            ._lru
-            .insert_shared(&mut self._hmap, maybe_old_entry, &key)
-        {
+        let (maybe_clash, inserted_idx, _inserted) = self._hmap.insert(e);
+        match self._lru.insert_shared(
+            &mut self._hmap,
+            maybe_clash,
+            inserted_idx,
+        ) {
             InsertResultShared::OldEntry { clash, evicted } => {
                 let c = match clash {
                     None => None,
@@ -127,10 +140,7 @@ impl<
                     None => None,
                     Some(x) => Some(x.deconstruct()),
                 };
-                let removed = self
-                    ._hmap
-                    .remove(unsafe { &*evicted.as_ptr() }.get_key())
-                    .unwrap();
+                let removed = self._hmap.remove(unsafe { &*evicted.as_ptr() });
                 InsertResult::OldTail {
                     clash: c,
                     evicted: removed.deconstruct(),
@@ -144,57 +154,58 @@ impl<
         self._lru.clear_shared()
     }
     pub fn remove(&mut self, key: &K) -> Option<(V, Umeta)> {
-        match self._hmap.remove(key) {
-            None => None,
-            Some(entry) => {
-                self._lru.remove_shared(&entry);
-                let (_, val, meta) = entry.deconstruct();
-                Some((val, meta))
-            }
-        }
+        let (idx, entry) = match self._hmap.get_full(key) {
+            None => return None,
+            Some((idx, entry)) => (idx, entry),
+        };
+        self._lru.remove_shared(entry);
+        let (_, val, meta) = self._hmap.remove_idx(idx).deconstruct();
+        Some((val, meta))
     }
     pub fn contains_key(&self, key: &K) -> bool {
-        self._hmap.contains_key(&key)
+        self._hmap.get_full(&key).is_some()
     }
     /// If present, make the entry the head of the LRU, and return pointers to
     /// the values
     pub fn make_head(&mut self, key: &K) -> Option<(&V, &Umeta)> {
-        match self._hmap.get_mut(key) {
+        match self._hmap.get_full_mut(key) {
             None => None,
-            Some(mut entry) => {
+            Some((_, mut entry)) => {
                 self._lru.make_head(&mut entry);
                 Some((entry.get_val(), entry.get_user()))
             }
         }
     }
     pub fn get(&mut self, key: &K) -> Option<(&V, &Umeta)> {
-        match self._hmap.get_mut(key) {
+        match self._hmap.get_full_mut(key) {
             None => None,
-            Some(mut entry) => {
+            Some((_, mut entry)) => {
                 self._lru.on_get(&mut entry);
                 Some((entry.get_val(), entry.get_user()))
             }
         }
     }
     pub fn get_mut(&mut self, key: &K) -> Option<(&mut V, &mut Umeta)> {
-        match self._hmap.get_mut(key) {
+        match self._hmap.get_full_mut(key) {
             None => None,
             //Some(mut entry) => Some((entry.get_val(), entry.get_user())),
-            Some(mut entry) => {
+            Some((_, mut entry)) => {
                 self._lru.on_get(&mut entry);
                 Some(entry.get_val_user_mut())
             }
         }
     }
 }
-pub struct LRUShared<E, K, V, Cid, Umeta, Fscan, HB>
+pub struct LRUShared<Hmap, E, K, V, Cid, Umeta, Fscan, HB>
 where
+    Hmap: hashmap::HashMap<E, K, V, Cid, Umeta, HB>,
     E: user::EntryT<K, V, Cid, Umeta>,
     K: crate::user::Hash,
     V: crate::user::Val,
     Cid: crate::user::Cid,
     Fscan: Sized + Fn(::std::ptr::NonNull<E>),
     Umeta: user::Meta<V>,
+    HB: ::std::hash::BuildHasher + Default,
 {
     _capacity: usize,
     _used: usize,
@@ -202,6 +213,7 @@ where
     _head: Option<::std::ptr::NonNull<E>>,
     _tail: Option<::std::ptr::NonNull<E>>,
     _cache_id: Cid,
+    _hmap: ::std::marker::PhantomData<Hmap>,
     _key: ::std::marker::PhantomData<K>,
     _val: ::std::marker::PhantomData<V>,
     _meta: ::std::marker::PhantomData<Umeta>,
@@ -210,14 +222,15 @@ where
 }
 
 impl<
+        Hmap: hashmap::HashMap<E, K, V, Cid, Umeta, HB>,
         E: user::EntryT<K, V, Cid, Umeta>,
         K: user::Hash,
         V: user::Val,
         Cid: crate::user::Cid,
         Umeta: user::Meta<V>,
         Fscan: Fn(::std::ptr::NonNull<E>),
-        HB: ::std::hash::BuildHasher,
-    > LRUShared<E, K, V, Cid, Umeta, Fscan, HB>
+        HB: ::std::hash::BuildHasher + Default,
+    > LRUShared<Hmap, E, K, V, Cid, Umeta, Fscan, HB>
 {
     /// Build a LRU that works on someone else's hasmap
     /// In this case each cache should have a different `Cid` (Cache ID) so that
@@ -227,13 +240,14 @@ impl<
         entries: usize,
         cache_id: Cid,
         access_scan: Fscan,
-    ) -> LRUShared<E, K, V, Cid, Umeta, Fscan, HB> {
+    ) -> LRUShared<Hmap, E, K, V, Cid, Umeta, Fscan, HB> {
         LRUShared {
             _capacity: entries,
             _used: 0,
             _head: None,
             _tail: None,
             _cache_id: cache_id,
+            _hmap: ::std::marker::PhantomData,
             _key: ::std::marker::PhantomData,
             _val: ::std::marker::PhantomData,
             _meta: ::std::marker::PhantomData,
@@ -247,11 +261,11 @@ impl<
     /// ols entry is part of the same cache
     pub fn insert_shared(
         &mut self,
-        hmap: &mut ::hashbrown::hash_map::HashMap<K, E, HB>,
+        hmap: &mut Hmap,
         maybe_old_entry: Option<E>,
-        key: &K,
+        new_entry_idx: usize,
     ) -> InsertResultShared<E> {
-        let just_inserted = hmap.get_mut(&key).unwrap();
+        let just_inserted = hmap.get_index_mut(new_entry_idx).unwrap();
         self._used += 1;
         self._scan.apply_raw(just_inserted.into());
         *just_inserted.get_cache_id_mut() = self._cache_id;
