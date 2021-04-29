@@ -31,13 +31,7 @@ pub enum InsertResult<E> {
     Success,
 }
 pub enum InsertResultShared<E> {
-    OldEntry {
-        clash: Option<E>,
-        evicted: Option<E>,
-    },
-    OldTailPtr {
-        clash: Option<E>,
-        evicted: ::std::ptr::NonNull<E>,
-    },
+    OldEntry { evicted: Option<E> },
+    OldTailPtr { evicted: ::std::ptr::NonNull<E> },
     Success,
 }

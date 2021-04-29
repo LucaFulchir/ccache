@@ -151,14 +151,16 @@ impl<
         // insert and get length and a ref to the value just inserted
         // we will use this ref to fix the linked lists in ll_tail/ll_head
         // of the various elements
-        let (maybe_old_entry, new_entry_idx, _new_entry) = self._hmap.insert(e);
+        let (mut maybe_old_entry, new_entry_idx, _new_entry) =
+            self._hmap.insert(e);
+        let maybe_ref_old = maybe_old_entry.as_mut();
         match self._slru.insert_shared(
             &mut self._hmap,
-            maybe_old_entry,
+            maybe_ref_old,
             new_entry_idx,
         ) {
-            InsertResultShared::OldEntry { clash, evicted } => {
-                let c = match clash {
+            InsertResultShared::OldEntry { evicted } => {
+                let c = match maybe_old_entry {
                     None => None,
                     Some(x) => Some(x.deconstruct()),
                 };
@@ -171,8 +173,8 @@ impl<
                     evicted: e,
                 }
             }
-            InsertResultShared::OldTailPtr { clash, evicted } => {
-                let c = match clash {
+            InsertResultShared::OldTailPtr { evicted } => {
+                let c = match maybe_old_entry {
                     None => None,
                     Some(x) => Some(x.deconstruct()),
                 };
@@ -287,7 +289,7 @@ impl<
     pub fn insert_shared(
         &mut self,
         hmap: &mut Hmap,
-        maybe_old_entry: Option<E>,
+        maybe_old_entry: Option<&mut E>,
         new_entry_idx: usize,
     ) -> InsertResultShared<E> {
         let just_inserted = hmap.get_index_mut(new_entry_idx).unwrap();
@@ -301,7 +303,7 @@ impl<
                 None,
                 new_entry_idx,
             ) {
-                InsertResultShared::OldTailPtr { clash: _, evicted } => {
+                InsertResultShared::OldTailPtr { evicted } => {
                     // clash is always None
                     // when an insert causes a tail eviction in the protected
                     // segment, that has to be re-inserted in the probatory
@@ -354,25 +356,7 @@ impl<
                             new_entry_idx,
                         );
                         self.update_scan_status();
-                        match res {
-                            InsertResultShared::OldEntry {
-                                clash: _,
-                                evicted,
-                            } => InsertResultShared::OldEntry {
-                                clash: Some(old_entry),
-                                evicted: evicted,
-                            },
-                            InsertResultShared::OldTailPtr {
-                                clash: _,
-                                evicted,
-                            } => InsertResultShared::OldTailPtr {
-                                clash: Some(old_entry),
-                                evicted: evicted,
-                            },
-                            InsertResultShared::Success => {
-                                InsertResultShared::Success
-                            }
-                        }
+                        res
                     }
                 }
             }

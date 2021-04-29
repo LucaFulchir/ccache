@@ -115,14 +115,15 @@ impl<
         // insert and get length and a ref to the value just inserted
         // we will use this ref to fix the linked lists in ll_tail/ll_head
         // of the various elements
-        let (maybe_clash, new_entry_idx, _new_entry) = self._hmap.insert(e);
+        let (mut maybe_clash, new_entry_idx, _new_entry) = self._hmap.insert(e);
+        let opt_ref_clash = maybe_clash.as_mut();
         match self._lru.insert_shared(
             &mut self._hmap,
-            maybe_clash,
+            opt_ref_clash,
             new_entry_idx,
         ) {
-            InsertResultShared::OldEntry { clash, evicted } => {
-                let c = match clash {
+            InsertResultShared::OldEntry { evicted } => {
+                let c = match maybe_clash {
                     None => None,
                     Some(x) => Some(x.deconstruct()),
                 };
@@ -135,8 +136,8 @@ impl<
                     evicted: e,
                 }
             }
-            InsertResultShared::OldTailPtr { clash, evicted } => {
-                let c = match clash {
+            InsertResultShared::OldTailPtr { evicted } => {
+                let c = match maybe_clash {
                     None => None,
                     Some(x) => Some(x.deconstruct()),
                 };
@@ -146,7 +147,13 @@ impl<
                     evicted: removed.deconstruct(),
                 }
             }
-            InsertResultShared::Success => InsertResult::Success,
+            InsertResultShared::Success => match maybe_clash {
+                None => InsertResult::Success,
+                Some(clash) => InsertResult::OldEntry {
+                    clash: Some(clash.deconstruct()),
+                    evicted: None,
+                },
+            },
         }
     }
     pub fn clear(&mut self) {
@@ -262,7 +269,7 @@ impl<
     pub fn insert_shared(
         &mut self,
         hmap: &mut Hmap,
-        maybe_old_entry: Option<E>,
+        maybe_old_entry: Option<&mut E>,
         new_entry_idx: usize,
     ) -> InsertResultShared<E> {
         let just_inserted = hmap.get_index_mut(new_entry_idx).unwrap();
@@ -293,7 +300,6 @@ impl<
                         to_rm_head.as_mut().set_tail_ptr(None);
                         self._tail = Some(to_rm_head);
                         return InsertResultShared::OldTailPtr {
-                            clash: None,
                             evicted: to_remove,
                         };
                     }
@@ -319,7 +325,7 @@ impl<
                 }
                 return InsertResultShared::Success;
             }
-            Some(mut old_entry) => {
+            Some(old_entry) => {
                 // the callee has added an element to the hashmap, but it
                 // clashed with something. We'll have to keep track of it and
                 // we should fix it
@@ -330,11 +336,11 @@ impl<
                 // number of elements remains the same.
                 // TL;DR: we had a clash, there can be no eviction
 
-                just_inserted.user_on_insert(Some(&mut old_entry));
+                just_inserted.user_on_insert(Some(old_entry));
                 // The clash was on something in our own cache.
                 // In this case the head or tail might need to be changed
 
-                self._scan.check_and_next((&old_entry).into());
+                self._scan.check_and_next((old_entry).into());
                 self._scan.apply_next();
                 match old_entry.get_head_ptr() {
                     None => {
@@ -360,10 +366,7 @@ impl<
                             }
                         }
                         self._head = Some(just_inserted.into());
-                        return InsertResultShared::OldEntry {
-                            clash: Some(old_entry),
-                            evicted: None,
-                        };
+                        return InsertResultShared::OldEntry { evicted: None };
                     }
                     Some(mut old_entry_head) => {
                         match old_entry.get_tail_ptr() {
@@ -381,7 +384,6 @@ impl<
                                 self._head = Some(just_inserted.into());
                                 self._tail = Some(old_entry_head);
                                 return InsertResultShared::OldEntry {
-                                    clash: Some(old_entry),
                                     evicted: None,
                                 };
                             }
@@ -404,7 +406,6 @@ impl<
                                 }
                                 self._head = Some(just_inserted.into());
                                 return InsertResultShared::OldEntry {
-                                    clash: Some(old_entry),
                                     evicted: None,
                                 };
                             }

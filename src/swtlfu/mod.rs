@@ -219,7 +219,7 @@ impl<
     pub fn insert_shared(
         &mut self,
         hmap: &mut Hmap,
-        maybe_old_entry: Option<E>,
+        maybe_old_entry: Option<&mut E>,
         new_entry_idx: usize,
     ) -> InsertResultShared<E> {
         let just_inserted = hmap.get_index_mut(new_entry_idx).unwrap();
