@@ -10,9 +10,10 @@ description = "Window Tiny LFU implementation"
 [dependencies]
 
 bitfield = "0.13"
-bitvec = "0.21"
+#bitvec = "0.21"
 hashbrown = { version = "0.11", features = ["raw"] }
 indexmap = "1.6"
 num-traits = "0.2"
+rand = "0.8"
 thiserror = "1.0"
 

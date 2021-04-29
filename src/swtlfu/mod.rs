@@ -19,6 +19,7 @@ mod counter;
 use crate::hashmap;
 use crate::results::{InsertResult, InsertResultShared};
 use crate::user;
+use rand::prelude::*;
 
 /// TinyLFU is a series of counters and an SLRU cache.
 /// W-TinyLFU adds another LRU window in front of all of this.
@@ -66,6 +67,7 @@ where
     _window: crate::lru::LRUShared<Hmap, E, K, V, CidCtr, Umeta, Fscan, HB>,
     _slru: crate::slru::SLRUShared<Hmap, E, K, V, CidCtr, Umeta, Fscan, HB>,
     _entries: usize,
+    _random: [usize; 2],
     _generation: counter::Generation,
     _cid_window: CidT,
     _cid_probation: CidT,
@@ -124,6 +126,20 @@ impl<
         protected: (usize, CidT),
         access_scan: Fscan,
     ) -> SWTLFUShared<Hmap, E, K, V, CidT, CidCtr, Umeta, Fscan, HB> {
+        // make sure there is at least one element per cache
+        // This assures us that there are at least 3 elements
+        // and thus we can safely generate 3 different indexes during get/insert
+        let real_window = if window.0 == 0 { (1, window.1) } else { window };
+        let real_probation = if protected.0 == 0 {
+            (1, probation.1)
+        } else {
+            probation
+        };
+        let real_protected = if protected.0 == 0 {
+            (1, protected.1)
+        } else {
+            protected
+        };
         SWTLFUShared {
             _window: crate::lru::LRUShared::<
                 Hmap,
@@ -135,7 +151,7 @@ impl<
                 Fscan,
                 HB,
             >::new(
-                window.0, CidCtr::new(window.1), access_scan
+                real_window.0, CidCtr::new(real_window.1), access_scan
             ),
             _slru: crate::slru::SLRUShared::<
                 Hmap,
@@ -147,18 +163,58 @@ impl<
                 Fscan,
                 HB,
             >::new(
-                (probation.0, CidCtr::new(probation.1)),
-                (protected.0, CidCtr::new(protected.1)),
+                (real_probation.0, CidCtr::new(real_probation.1)),
+                (real_protected.0, CidCtr::new(real_protected.1)),
                 access_scan,
             ),
-            _entries: window.0 + probation.0 + protected.0,
+            _entries: real_window.0 + real_probation.0 + real_protected.0,
+            _random: [rand::random::<usize>(), rand::random::<usize>()],
             _generation: counter::Generation::default(),
-            _cid_window: window.1,
-            _cid_probation: probation.1,
-            _cid_protected: protected.1,
+            _cid_window: real_window.1,
+            _cid_probation: real_probation.1,
+            _cid_protected: real_protected.1,
             _hmap: ::std::marker::PhantomData,
             _cid: ::std::marker::PhantomData,
         }
+    }
+    // return ALL indexes chosen deterministically based on the one in input
+    // make sure they are different and that the initial index is included
+    fn det_idx(&self, idx: usize) -> [usize; 3] {
+        let first = {
+            let tmp = (idx ^ self._random[0]) % self._entries;
+            if tmp != idx {
+                tmp
+            } else {
+                (tmp + 1) % self._entries
+            }
+        };
+        let second: usize = {
+            let mut tmp = (idx ^ self._random[1]) % self._entries;
+            loop {
+                if tmp != idx && tmp != first {
+                    break tmp;
+                }
+                tmp = (tmp - 1) % self._entries;
+            }
+        };
+        [idx, first, second]
+    }
+    // choose the entry to evict
+    fn choose_evict(&self, hmap: &mut Hmap, idx: usize) -> usize {
+        let (mut toevict, mut minfreq) = (idx, usize::MAX);
+        for idx in self.det_idx(idx).into_iter() {
+            match hmap.get_index(*idx) {
+                None => {}
+                Some(entry) => {
+                    let freq = entry.get_cache_id().get_counter() as usize;
+                    if freq < minfreq {
+                        minfreq = freq;
+                        toevict = *idx;
+                    }
+                }
+            }
+        }
+        toevict
     }
     pub fn insert_shared(
         &mut self,
@@ -167,39 +223,60 @@ impl<
         new_entry_idx: usize,
     ) -> InsertResultShared<E> {
         let just_inserted = hmap.get_index_mut(new_entry_idx).unwrap();
-
-        match maybe_old_entry {
-            None => {
-                let cid_j_i = just_inserted.get_cache_id().get_cid();
-                if cid_j_i == self._cid_window {
-                    // promote it to main
-                    self._window.remove_shared(just_inserted);
-                    self._slru.insert_shared(hmap, None, new_entry_idx)
-                } else if (cid_j_i == self._cid_probation)
-                    || (cid_j_i == self._cid_protected)
-                {
-                    // let the main shared handle this
-                    self._slru.insert_shared(hmap, None, new_entry_idx);
-                    InsertResultShared::Success
-                } else {
-                    // put in window
-                    match self._window.insert_shared(hmap, None, new_entry_idx)
-                    {
-                        // if we have evicted, they are given a second chance
-                        InsertResultShared::OldTailPtr { clash, evicted } => {
-                            // window eviction.
-                            // TODO: check frequencies, see if we can insert on
-                            // slru
-                            InsertResultShared::Success
-                        }
-                        res @ _ => {
-                            // either success or hash clash. nothing we can do
-                            res
-                        }
+        let cid_j_i = just_inserted.get_cache_id().get_cid();
+        if cid_j_i == self._cid_window {
+            // promote it to main
+            self._window.remove_shared(just_inserted);
+            match maybe_old_entry {
+                None => self._slru.insert_shared(hmap, None, new_entry_idx),
+                Some(old_entry) => {
+                    if old_entry.get_cache_id().get_cid() == self._cid_window {
+                        self._slru.insert_shared(
+                            hmap,
+                            Some(old_entry),
+                            new_entry_idx,
+                        )
+                    } else {
+                        self._slru.insert_shared(hmap, None, new_entry_idx)
                     }
                 }
             }
-            Some(old_entry) => InsertResultShared::Success,
+        } else if (cid_j_i == self._cid_probation)
+            || (cid_j_i == self._cid_protected)
+        {
+            match maybe_old_entry {
+                None => self._slru.insert_shared(hmap, None, new_entry_idx),
+                Some(old_entry) => {
+                    let old_cid = old_entry.get_cache_id().get_cid();
+                    if (old_cid == self._cid_probation)
+                        || (old_cid == self._cid_protected)
+                    {
+                        self._slru.insert_shared(
+                            hmap,
+                            Some(old_entry),
+                            new_entry_idx,
+                        )
+                    } else {
+                        self._slru.insert_shared(hmap, None, new_entry_idx)
+                    }
+                }
+            }
+        } else {
+            // put in window
+            match maybe_old_entry {
+                None => self._window.insert_shared(hmap, None, new_entry_idx),
+                Some(old_entry) => {
+                    if old_entry.get_cache_id().get_cid() == self._cid_window {
+                        self._window.insert_shared(
+                            hmap,
+                            Some(old_entry),
+                            new_entry_idx,
+                        )
+                    } else {
+                        self._window.insert_shared(hmap, None, new_entry_idx)
+                    }
+                }
+            }
         }
     }
 }

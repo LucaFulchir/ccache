@@ -196,7 +196,7 @@ impl<
         }
     }
 }
-pub struct LRUShared<Hmap, E, K, V, CidT: user::Cid, Umeta, Fscan, HB>
+pub struct LRUShared<Hmap, E, K, V, CidT, Umeta, Fscan, HB>
 where
     Hmap: hashmap::HashMap<E, K, V, CidT, Umeta, HB>,
     E: user::EntryT<K, V, CidT, Umeta>,

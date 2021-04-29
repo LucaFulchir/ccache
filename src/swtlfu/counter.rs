@@ -101,8 +101,10 @@ impl From<u8> for WTLFUCid {
     }
 }
 
+// This is a Cid, but it hides generation and counters inside
+// make sure it behaves as a Cid first and foremost
 ::bitfield::bitfield! {
-    #[derive(PartialEq, Eq, Copy, Clone)]
+    #[derive(Copy, Clone)]
     pub struct Full32(u32);
     impl Debug;
     #[inline]
@@ -119,6 +121,12 @@ impl Default for Full32 {
         Full32(0)
     }
 }
+impl PartialEq for Full32 {
+    fn eq(&self, other: &Self) -> bool {
+        self.g_cid() == other.g_cid()
+    }
+}
+impl Eq for Full32 {}
 
 impl CidCounter<WTLFUCid> for Full32 {
     fn new(cid: WTLFUCid) -> Self {
