@@ -19,7 +19,6 @@ mod counter;
 use crate::hashmap;
 use crate::results::{InsertResult, InsertResultShared};
 use crate::user;
-use rand::prelude::*;
 
 /// TinyLFU is a series of counters and an SLRU cache.
 /// W-TinyLFU adds another LRU window in front of all of this.
@@ -168,7 +167,7 @@ impl<
                 access_scan,
             ),
             _entries: real_window.0 + real_probation.0 + real_protected.0,
-            _random: [rand::random::<usize>(), rand::random::<usize>()],
+            _random: [::rand::random::<usize>(), ::rand::random::<usize>()],
             _generation: counter::Generation::default(),
             _cid_window: real_window.1,
             _cid_probation: real_probation.1,
@@ -202,7 +201,7 @@ impl<
     // choose the entry to evict
     fn choose_evict(&self, hmap: &mut Hmap, idx: usize) -> usize {
         let (mut toevict, mut minfreq) = (idx, usize::MAX);
-        for idx in self.det_idx(idx).into_iter() {
+        for idx in self.det_idx(idx).iter() {
             match hmap.get_index(*idx) {
                 None => {}
                 Some(entry) => {
@@ -263,7 +262,8 @@ impl<
             }
         } else {
             // put in window
-            match maybe_old_entry {
+            // evicted from window get a second chance
+            let res_window = match maybe_old_entry {
                 None => self._window.insert_shared(hmap, None, new_entry_idx),
                 Some(old_entry) => {
                     if old_entry.get_cache_id().get_cid() == self._cid_window {
@@ -276,6 +276,26 @@ impl<
                         self._window.insert_shared(hmap, None, new_entry_idx)
                     }
                 }
+            };
+            match res_window {
+                InsertResultShared::OldEntry { evicted } => {
+                    // This means that we had a clash and we are forced to
+                    // report the evicted as such, it makes
+                    // no sense to try to add it again to the
+                    // SLRU since it would benerate more clashes
+                    InsertResultShared::OldEntry { evicted }
+                }
+                InsertResultShared::OldTailPtr { evicted } => {
+                    let evicted_idx =
+                        unsafe { hmap.index_from_entry(&*evicted.as_ptr()) };
+                    let to_evict_idx = self.choose_evict(hmap, evicted_idx);
+                    let to_evict = hmap.get_index(to_evict_idx).unwrap();
+                    if to_evict.get_cache_id().get_cid() == self._cid_window {
+                        return InsertResultShared::Success;
+                    }
+                    self._slru.insert_shared(hmap, None, evicted_idx)
+                }
+                InsertResultShared::Success => InsertResultShared::Success,
             }
         }
     }
