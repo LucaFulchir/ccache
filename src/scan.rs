@@ -16,15 +16,15 @@
 use crate::user;
 
 pub struct Scan<
+    'a,
     E: user::EntryT<K, V, Cid, Umeta>,
     K: user::Hash,
     V: user::Val,
     Cid: user::Cid,
     Umeta: user::Meta<V>,
-    F: Fn(::std::ptr::NonNull<E>),
 > {
     last: Option<::std::ptr::NonNull<E>>,
-    f: F,
+    f: &'a dyn Fn(::std::ptr::NonNull<E>) -> (),
     _k: ::std::marker::PhantomData<K>,
     _v: ::std::marker::PhantomData<V>,
     _cid: ::std::marker::PhantomData<Cid>,
@@ -32,15 +32,15 @@ pub struct Scan<
 }
 
 impl<
+        'a,
         E: user::EntryT<K, V, Cid, Umeta>,
         K: user::Hash,
         V: user::Val,
         Cid: user::Cid,
         Umeta: user::Meta<V>,
-        F: Fn(::std::ptr::NonNull<E>),
-    > Scan<E, K, V, Cid, Umeta, F>
+    > Scan<'a, E, K, V, Cid, Umeta>
 {
-    pub fn new(f: F) -> Self {
+    pub fn new(f: &'a dyn Fn(::std::ptr::NonNull<E>) -> ()) -> Self {
         Scan {
             last: None,
             f: f,
@@ -111,29 +111,3 @@ where
 {
     // do nothing
 }
-/*
-impl<
-        E: crate::user::EntryT<K, V, Cid, Umeta>,
-        K,
-        V,
-        Cid,
-        Umeta,
-        F: FnMut(::std::ptr::NonNull<E>) -> Option<::std::ptr::NonNull<E>>,
-    > Scan<E, K, V, Umeta, F>
-{
-    pub fn update_next(&mut self) {
-        match self.last {
-            None => {}
-            Some(ptr_entry) => match ptr_entry.get().get_tail_ptr() {
-                None => {
-                    self.last = None;
-                }
-                Some(ptr_tail) => {
-                    (self.f)(ptr_tail.into());
-                    self.last = Some(ptr_tail.into());
-                }
-            },
-        }
-    }
-}
-*/

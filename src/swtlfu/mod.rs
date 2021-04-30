@@ -20,6 +20,13 @@ use crate::hashmap;
 use crate::results::{InsertResult, InsertResultShared};
 use crate::user;
 
+#[derive(PartialEq, Eq)]
+enum ScanStatus {
+    Stopped,
+    RunningWindow,
+    RunningSLRU,
+}
+
 /// TinyLFU is a series of counters and an SLRU cache.
 /// W-TinyLFU adds another LRU window in front of all of this.
 ///
@@ -51,7 +58,7 @@ use crate::user;
 /// element should be moved between caches, but we now need something that
 /// tracks to which cache an entry belongs to (the `Cid` -- Cache Id)
 
-pub struct SWTLFUShared<Hmap, E, K, V, CidT, CidCtr, Umeta, Fscan, HB>
+pub struct SWTLFUShared<'a, Hmap, E, K, V, CidT, CidCtr, Umeta, HB>
 where
     Hmap: hashmap::HashMap<E, K, V, CidCtr, Umeta, HB>,
     E: user::EntryT<K, V, CidCtr, Umeta>,
@@ -60,14 +67,14 @@ where
     CidT: user::Cid,
     CidCtr: counter::CidCounter<CidT>,
     Umeta: user::Meta<V>,
-    Fscan: Sized + Copy + Fn(::std::ptr::NonNull<E>),
     HB: ::std::hash::BuildHasher + Default,
 {
-    _window: crate::lru::LRUShared<Hmap, E, K, V, CidCtr, Umeta, Fscan, HB>,
-    _slru: crate::slru::SLRUShared<Hmap, E, K, V, CidCtr, Umeta, Fscan, HB>,
+    _window: crate::lru::LRUShared<'a, Hmap, E, K, V, CidCtr, Umeta, HB>,
+    _slru: crate::slru::SLRUShared<'a, Hmap, E, K, V, CidCtr, Umeta, HB>,
     _entries: usize,
     _random: [usize; 2],
-    _generation: counter::Generation,
+    _scanstatus: ScanStatus,
+    _generation: ::std::boxed::Box<counter::Generation>,
     _cid_window: CidT,
     _cid_probation: CidT,
     _cid_protected: CidT,
@@ -76,6 +83,7 @@ where
 }
 
 impl<
+        'a,
         Hmap: hashmap::HashMap<E, K, V, CidCtr, Umeta, HB>,
         E: user::EntryT<K, V, CidCtr, Umeta>,
         K: user::Hash,
@@ -83,17 +91,16 @@ impl<
         CidT: user::Cid,
         CidCtr: counter::CidCounter<CidT>,
         Umeta: user::Meta<V>,
-        Fscan: Sized + Copy + Fn(::std::ptr::NonNull<E>),
         HB: ::std::hash::BuildHasher + Default,
-    > SWTLFUShared<Hmap, E, K, V, CidT, CidCtr, Umeta, Fscan, HB>
+    > SWTLFUShared<'a, Hmap, E, K, V, CidT, CidCtr, Umeta, HB>
 {
     pub fn new_standard(
         window_cid: CidT,
         probation_cid: CidT,
         protected_cid: CidT,
         entries: usize,
-        access_scan: Fscan,
-    ) -> SWTLFUShared<Hmap, E, K, V, CidT, CidCtr, Umeta, Fscan, HB> {
+        access_scan: &'a dyn Fn(::std::ptr::NonNull<E>) -> (),
+    ) -> Self {
         // We keep at least one element in each cache
 
         let floor_window_entries = ((entries as f64) * 0.01) as usize;
@@ -123,8 +130,8 @@ impl<
         window: (usize, CidT),
         probation: (usize, CidT),
         protected: (usize, CidT),
-        access_scan: Fscan,
-    ) -> SWTLFUShared<Hmap, E, K, V, CidT, CidCtr, Umeta, Fscan, HB> {
+        access_scan: &'a dyn Fn(::std::ptr::NonNull<E>) -> (),
+    ) -> Self {
         // make sure there is at least one element per cache
         // This assures us that there are at least 3 elements
         // and thus we can safely generate 3 different indexes during get/insert
@@ -139,36 +146,40 @@ impl<
         } else {
             protected
         };
+        let gen = ::std::boxed::Box::new(counter::Generation::default());
         SWTLFUShared {
-            _window: crate::lru::LRUShared::<
+            _window: crate::lru::LRUShared::<'a,
                 Hmap,
                 E,
                 K,
                 V,
                 CidCtr,
                 Umeta,
-                Fscan,
                 HB,
             >::new(
-                real_window.0, CidCtr::new(real_window.1), access_scan
+                real_window.0,
+                CidCtr::new(real_window.1),
+                access_scan,
+                //SWTLFUShared::<Hmap, E, K, V, CidT, CidCtr, Umeta, Fscan, HB>::scan_counters_and_user(&*gen, &access_scan),
             ),
-            _slru: crate::slru::SLRUShared::<
+            _slru: crate::slru::SLRUShared::<'a,
                 Hmap,
                 E,
                 K,
                 V,
                 CidCtr,
                 Umeta,
-                Fscan,
                 HB,
             >::new(
                 (real_probation.0, CidCtr::new(real_probation.1)),
                 (real_protected.0, CidCtr::new(real_protected.1)),
                 access_scan,
+                //SWTLFUShared::<Hmap, E, K, V, CidT, CidCtr, Umeta, Fscan, HB>::scan_counters_and_user(&*gen, &access_scan),
             ),
             _entries: real_window.0 + real_probation.0 + real_protected.0,
             _random: [::rand::random::<usize>(), ::rand::random::<usize>()],
-            _generation: counter::Generation::default(),
+            _scanstatus: ScanStatus::Stopped,
+            _generation: gen,
             _cid_window: real_window.1,
             _cid_probation: real_probation.1,
             _cid_protected: real_protected.1,
@@ -221,6 +232,7 @@ impl<
         maybe_old_entry: Option<&mut E>,
         new_entry_idx: usize,
     ) -> InsertResultShared<E> {
+        // TODO: scan one more entry
         let just_inserted = hmap.get_index_mut(new_entry_idx).unwrap();
         let cid_j_i = just_inserted.get_cache_id().get_cid();
         if cid_j_i == self._cid_window {
@@ -299,4 +311,100 @@ impl<
             }
         }
     }
+    pub fn clear_shared(&mut self) {
+        self._window.clear_shared();
+        self._slru.clear_shared();
+    }
+    pub fn remove_shared(&mut self, entry: &E) {
+        let res = if entry.get_cache_id().get_cid() == self._cid_window {
+            self._window.remove_shared(entry)
+        } else {
+            self._slru.remove_shared(entry)
+        };
+        self.update_scan_status();
+        res
+    }
+    pub fn get_cache_ids(&self) -> [CidT; 3] {
+        [self._cid_window, self._cid_probation, self._cid_protected]
+    }
+    pub fn on_get(&mut self, entry: &mut E) {
+        if entry.get_cache_id().get_cid() == self._cid_window {
+            self._window.on_get(entry);
+        } else {
+            self._slru.on_get(entry);
+        }
+        self.update_scan_status();
+    }
+    pub fn start_scan(&mut self) {
+        if self._scanstatus != ScanStatus::Stopped {
+            return;
+        }
+        self._window.start_scan();
+        match self._window.is_scan_running() {
+            true => {
+                self._scanstatus = ScanStatus::RunningWindow;
+            }
+            false => {
+                self._slru.start_scan();
+                match self._slru.is_scan_running() {
+                    true => {
+                        self._scanstatus = ScanStatus::RunningSLRU;
+                    }
+                    false => {
+                        self._scanstatus = ScanStatus::Stopped;
+                    }
+                }
+            }
+        }
+    }
+    pub fn is_scan_running(&self) -> bool {
+        return self._scanstatus != ScanStatus::Stopped;
+    }
+    fn update_scan_status(&mut self) {
+        //FIXME: make continuous
+        match self._scanstatus {
+            ScanStatus::Stopped => {}
+            ScanStatus::RunningWindow => match self._window.is_scan_running() {
+                true => {}
+                false => {
+                    self._slru.start_scan();
+                    self._scanstatus = ScanStatus::RunningSLRU;
+                }
+            },
+            ScanStatus::RunningSLRU => match self._slru.is_scan_running() {
+                true => {}
+                false => {
+                    self._scanstatus = ScanStatus::Stopped;
+                }
+            },
+        }
+    }
+    pub fn capacity(&self) -> usize {
+        self._entries
+    }
+    pub fn len(&self) -> usize {
+        self._window.len() + self._slru.len()
+    }
+
+    /*
+    fn scan_counters_and_user<'a>(
+        generation: &'a counter::Generation,
+        fscan: &Fscan,
+        //) -> impl Fn(::std::ptr::NonNull<E>) + 'a {
+    ) -> Fscan {
+        // FIXME: fuck this shit and go to function pointers
+        //) -> Fscan {
+        //|entry| {
+        |entry: ::std::ptr::NonNull<E>| {
+            unsafe {
+                if *generation
+                    != (*entry.as_ptr()).get_cache_id().get_generation()
+                {
+                    // FIXME
+                }
+            }
+            fscan(entry)
+        }
+    }
+    */
 }

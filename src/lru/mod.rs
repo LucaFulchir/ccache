@@ -36,7 +36,7 @@ type HmapT<K, V, Umeta, HB> = hashmap::SimpleHmap<
 // TODO: generalize: K in the first Hashmap template parameter is not
 // necessarily the same K in the user::Entry<K>
 // (e.g: could be a pointer to user::Entry<K>.key)
-pub struct LRU<K, V, Umeta, HB>
+pub struct LRU<'a, K, V, Umeta, HB>
 where
     K: user::Hash,
     V: user::Val,
@@ -45,46 +45,47 @@ where
 {
     _hmap: HmapT<K, V, Umeta, HB>,
     _lru: LRUShared<
+        'a,
         HmapT<K, V, Umeta, HB>,
         LRUEntry<K, V, Umeta>,
         K,
         V,
         ::std::marker::PhantomData<K>,
         Umeta,
-        fn(::std::ptr::NonNull<LRUEntry<K, V, Umeta>>),
         HB,
     >,
 }
 impl<
+        'a,
         K: user::Hash,
         V: user::Val,
         Umeta: user::Meta<V>,
         HB: ::std::hash::BuildHasher + Default,
-    > LRU<K, V, Umeta, HB>
+    > LRU<'a, K, V, Umeta, HB>
 {
     pub fn new(
         entries: usize,
         extra_hashmap_capacity: usize,
         hash_builder: HB,
-    ) -> LRU<K, V, Umeta, HB> {
+    ) -> LRU<'a, K, V, Umeta, HB> {
         LRU {
             _hmap: HmapT::<K, V, Umeta, HB>::with_capacity_and_hasher(
                 1 + entries + extra_hashmap_capacity,
                 hash_builder,
             ),
             _lru: LRUShared::<
+                '_,
                 HmapT<K, V, Umeta, HB>,
                 LRUEntry<K, V, Umeta>,
                 K,
                 V,
                 ::std::marker::PhantomData<K>,
                 Umeta,
-                fn(::std::ptr::NonNull<LRUEntry<K, V, Umeta>>),
                 HB,
             >::new(
                 entries,
                 ::std::marker::PhantomData,
-                crate::scan::null_scan::<
+                &crate::scan::null_scan::<
                     LRUEntry<K, V, Umeta>,
                     K,
                     V,
@@ -203,14 +204,13 @@ impl<
         }
     }
 }
-pub struct LRUShared<Hmap, E, K, V, CidT, Umeta, Fscan, HB>
+pub struct LRUShared<'a, Hmap, E, K, V, CidT, Umeta, HB>
 where
     Hmap: hashmap::HashMap<E, K, V, CidT, Umeta, HB>,
     E: user::EntryT<K, V, CidT, Umeta>,
     K: user::Hash,
     V: user::Val,
     CidT: user::Cid,
-    Fscan: Sized + Fn(::std::ptr::NonNull<E>),
     Umeta: user::Meta<V>,
     HB: ::std::hash::BuildHasher + Default,
 {
@@ -225,19 +225,19 @@ where
     _val: ::std::marker::PhantomData<V>,
     _meta: ::std::marker::PhantomData<Umeta>,
     _hashbuilder: ::std::marker::PhantomData<HB>,
-    _scan: crate::scan::Scan<E, K, V, CidT, Umeta, Fscan>,
+    _scan: crate::scan::Scan<'a, E, K, V, CidT, Umeta>,
 }
 
 impl<
+        'a,
         Hmap: hashmap::HashMap<E, K, V, CidT, Umeta, HB>,
         E: user::EntryT<K, V, CidT, Umeta>,
         K: user::Hash,
         V: user::Val,
         CidT: user::Cid,
         Umeta: user::Meta<V>,
-        Fscan: Fn(::std::ptr::NonNull<E>),
         HB: ::std::hash::BuildHasher + Default,
-    > LRUShared<Hmap, E, K, V, CidT, Umeta, Fscan, HB>
+    > LRUShared<'a, Hmap, E, K, V, CidT, Umeta, HB>
 {
     /// Build a LRU that works on someone else's hasmap
     /// In this case each cache should have a different `Cid` (Cache ID) so that
@@ -246,8 +246,8 @@ impl<
     pub fn new(
         entries: usize,
         cache_id: CidT,
-        access_scan: Fscan,
-    ) -> LRUShared<Hmap, E, K, V, CidT, Umeta, Fscan, HB> {
+        access_scan: &'a dyn Fn(::std::ptr::NonNull<E>) -> (),
+    ) -> Self {
         LRUShared {
             _capacity: entries,
             _used: 0,
@@ -532,5 +532,11 @@ impl<
     }
     pub fn is_scan_running(&self) -> bool {
         self._scan.is_running()
+    }
+    pub fn capacity(&self) -> usize {
+        self._capacity
+    }
+    pub fn len(&self) -> usize {
+        self._used
     }
 }

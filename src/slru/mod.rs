@@ -63,7 +63,7 @@ type HmapT<K, V, Umeta, HB> =
 ///  * probation LRU: for items that have been just added
 ///  * protected LRU: items that were in the probation LRU and received a HIT
 /// W-TinyLRU specifies an 20-80 split, with 80% for the probation LRU
-pub struct SLRU<K, V, Umeta, HB>
+pub struct SLRU<'a, K, V, Umeta, HB>
 where
     K: user::Hash,
     V: user::Val,
@@ -72,30 +72,31 @@ where
 {
     _hmap: HmapT<K, V, Umeta, HB>,
     _slru: SLRUShared<
+        'a,
         HmapT<K, V, Umeta, HB>,
         SLRUEntry<K, V, Umeta>,
         K,
         V,
         SLRUCid,
         Umeta,
-        fn(::std::ptr::NonNull<user::Entry<K, V, SLRUCid, Umeta>>),
         HB,
     >,
 }
 
 impl<
+        'a,
         K: user::Hash,
         V: user::Val,
         Umeta: user::Meta<V>,
         HB: ::std::hash::BuildHasher + Default,
-    > SLRU<K, V, Umeta, HB>
+    > SLRU<'a, K, V, Umeta, HB>
 {
     pub fn new(
         probation_entries: usize,
         protected_entries: usize,
         extra_hashmap_capacity: usize,
         hash_builder: HB,
-    ) -> SLRU<K, V, Umeta, HB> {
+    ) -> Self {
         SLRU {
             _hmap: HmapT::<K, V, Umeta, HB>::with_capacity_and_hasher(
                 1 + probation_entries
@@ -104,13 +105,13 @@ impl<
                 hash_builder,
             ),
             _slru: SLRUShared::<
+                'a,
                 HmapT<K, V, Umeta, HB>,
                 SLRUEntry<K, V, Umeta>,
                 K,
                 V,
                 SLRUCid,
                 Umeta,
-                fn(::std::ptr::NonNull<SLRUEntry<K, V, Umeta>>),
                 HB,
             >::new(
                 (
@@ -121,7 +122,7 @@ impl<
                     protected_entries,
                     SLRUCid::Protected(SLRUCidProtected::default()),
                 ),
-                crate::scan::null_scan::<
+                &crate::scan::null_scan::<
                     SLRUEntry<K, V, Umeta>,
                     K,
                     V,
@@ -226,7 +227,7 @@ enum ScanStatus {
     RunningProbation,
     RunningProtected,
 }
-pub struct SLRUShared<Hmap, E, K, V, CidT, Umeta, Fscan, HB>
+pub struct SLRUShared<'a, Hmap, E, K, V, CidT, Umeta, HB>
 where
     Hmap: hashmap::HashMap<E, K, V, CidT, Umeta, HB>,
     E: user::EntryT<K, V, CidT, Umeta>,
@@ -234,51 +235,50 @@ where
     V: user::Val,
     CidT: user::Cid,
     Umeta: user::Meta<V>,
-    Fscan: Sized + Fn(::std::ptr::NonNull<E>),
     HB: ::std::hash::BuildHasher + Default,
 {
-    _probation: crate::lru::LRUShared<Hmap, E, K, V, CidT, Umeta, Fscan, HB>,
-    _protected: crate::lru::LRUShared<Hmap, E, K, V, CidT, Umeta, Fscan, HB>,
+    _probation: crate::lru::LRUShared<'a, Hmap, E, K, V, CidT, Umeta, HB>,
+    _protected: crate::lru::LRUShared<'a, Hmap, E, K, V, CidT, Umeta, HB>,
     _scanstatus: ScanStatus,
 }
 
 impl<
+        'a,
         Hmap: hashmap::HashMap<E, K, V, CidT, Umeta, HB>,
         E: user::EntryT<K, V, CidT, Umeta>,
         K: user::Hash,
         V: user::Val,
         CidT: user::Cid,
         Umeta: user::Meta<V>,
-        Fscan: Sized + Fn(::std::ptr::NonNull<E>) + Copy,
         HB: ::std::hash::BuildHasher + Default,
-    > SLRUShared<Hmap, E, K, V, CidT, Umeta, Fscan, HB>
+    > SLRUShared<'a, Hmap, E, K, V, CidT, Umeta, HB>
 {
     pub fn new(
         probation: (usize, CidT),
         protected: (usize, CidT),
-        access_scan: Fscan,
-    ) -> SLRUShared<Hmap, E, K, V, CidT, Umeta, Fscan, HB> {
+        access_scan: &'a dyn Fn(::std::ptr::NonNull<E>) -> (),
+    ) -> Self {
         SLRUShared {
             _probation: crate::lru::LRUShared::<
+                'a,
                 Hmap,
                 E,
                 K,
                 V,
                 CidT,
                 Umeta,
-                Fscan,
                 HB,
             >::new(
                 probation.0, probation.1, access_scan.clone()
             ),
             _protected: crate::lru::LRUShared::<
+                'a,
                 Hmap,
                 E,
                 K,
                 V,
                 CidT,
                 Umeta,
-                Fscan,
                 HB,
             >::new(
                 protected.0, protected.1, access_scan
@@ -433,5 +433,11 @@ impl<
                 }
             }
         }
+    }
+    pub fn capacity(&self) -> usize {
+        self._probation.capacity() + self._protected.capacity()
+    }
+    pub fn len(&self) -> usize {
+        self._probation.len() + self._protected.len()
     }
 }
