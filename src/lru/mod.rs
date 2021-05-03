@@ -82,17 +82,7 @@ impl<
                 ::std::marker::PhantomData<K>,
                 Umeta,
                 HB,
-            >::new(
-                entries,
-                ::std::marker::PhantomData,
-                &crate::scan::null_scan::<
-                    LRUEntry<K, V, Umeta>,
-                    K,
-                    V,
-                    ::std::marker::PhantomData<K>,
-                    Umeta,
-                >,
-            ),
+            >::new(entries, ::std::marker::PhantomData, None),
         }
     }
     pub fn insert(&mut self, key: K, val: V) -> InsertResult<(K, V, Umeta)> {
@@ -246,7 +236,7 @@ impl<
     pub fn new(
         entries: usize,
         cache_id: CidT,
-        access_scan: &'a dyn Fn(::std::ptr::NonNull<E>) -> (),
+        access_scan: Option<&'a dyn Fn(::std::ptr::NonNull<E>) -> ()>,
     ) -> Self {
         LRUShared {
             _capacity: entries,

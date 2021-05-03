@@ -122,13 +122,7 @@ impl<
                     protected_entries,
                     SLRUCid::Protected(SLRUCidProtected::default()),
                 ),
-                &crate::scan::null_scan::<
-                    SLRUEntry<K, V, Umeta>,
-                    K,
-                    V,
-                    SLRUCid,
-                    Umeta,
-                >,
+                None,
             ),
         }
     }
@@ -256,7 +250,7 @@ impl<
     pub fn new(
         probation: (usize, CidT),
         protected: (usize, CidT),
-        access_scan: &'a dyn Fn(::std::ptr::NonNull<E>) -> (),
+        access_scan: Option<&'a dyn Fn(::std::ptr::NonNull<E>) -> ()>,
     ) -> Self {
         SLRUShared {
             _probation: crate::lru::LRUShared::<

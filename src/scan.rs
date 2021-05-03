@@ -24,7 +24,7 @@ pub struct Scan<
     Umeta: user::Meta<V>,
 > {
     last: Option<::std::ptr::NonNull<E>>,
-    f: &'a dyn Fn(::std::ptr::NonNull<E>) -> (),
+    f: Option<&'a dyn Fn(::std::ptr::NonNull<E>) -> ()>,
     _k: ::std::marker::PhantomData<K>,
     _v: ::std::marker::PhantomData<V>,
     _cid: ::std::marker::PhantomData<Cid>,
@@ -40,7 +40,7 @@ impl<
         Umeta: user::Meta<V>,
     > Scan<'a, E, K, V, Cid, Umeta>
 {
-    pub fn new(f: &'a dyn Fn(::std::ptr::NonNull<E>) -> ()) -> Self {
+    pub fn new(f: Option<&'a dyn Fn(::std::ptr::NonNull<E>) -> ()>) -> Self {
         Scan {
             last: None,
             f: f,
@@ -54,18 +54,22 @@ impl<
         self.last != None
     }
     pub fn start_scan(&mut self, entry: ::std::ptr::NonNull<E>) {
-        (self.f)(entry);
-        self.last = Some(entry);
+        if self.f.is_some() {
+            (self.f.unwrap())(entry);
+            self.last = Some(entry);
+        }
     }
     pub fn stop(&mut self) {
         self.last = None;
     }
     pub fn apply_raw(&self, entry: ::std::ptr::NonNull<E>) {
-        (self.f)(entry);
+        if self.f.is_some() {
+            (self.f.unwrap())(entry);
+        }
     }
     /// Apply "f" to the entry in the tail, update the last node
     pub fn apply_next(&mut self) {
-        if self.last == None {
+        if self.last == None || self.f.is_none() {
             return;
         }
         let next_tail = unsafe { self.last.unwrap().as_mut().get_tail_ptr() };
@@ -74,7 +78,7 @@ impl<
                 self.last = None;
             }
             Some(next) => {
-                (self.f)(next);
+                (self.f.unwrap())(next);
                 self.last = Some(next);
             }
         }
@@ -82,6 +86,9 @@ impl<
     /// When a node is removed, check if it was the "last" node we scanned.
     /// In that case we will have to advance to the tail ptr and re-apply "f"
     pub fn check_and_next(&mut self, entry: ::std::ptr::NonNull<E>) {
+        if self.f.is_none() {
+            return;
+        }
         match self.last {
             None => {}
             Some(mut ptr_e) => {
@@ -91,7 +98,7 @@ impl<
                             self.last = None;
                         }
                         Some(ptr_next) => {
-                            (self.f)(ptr_next);
+                            (self.f.unwrap())(ptr_next);
                             self.last = Some(ptr_next);
                         }
                     }
@@ -99,15 +106,4 @@ impl<
             }
         }
     }
-}
-
-pub fn null_scan<E, K, V, Cid, Umeta>(_entry: ::std::ptr::NonNull<E>)
-where
-    E: crate::user::EntryT<K, V, Cid, Umeta>,
-    K: user::Hash,
-    V: user::Val,
-    Cid: user::Cid,
-    Umeta: user::Meta<V>,
-{
-    // do nothing
 }

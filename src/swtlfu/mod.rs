@@ -100,7 +100,7 @@ impl<
         probation_cid: CidT,
         protected_cid: CidT,
         entries: usize,
-        access_scan: &'a dyn Fn(::std::ptr::NonNull<E>) -> (),
+        access_scan: Option<&'a dyn Fn(::std::ptr::NonNull<E>) -> ()>,
     ) -> Self {
         // We keep at least one element in each cache
 
@@ -131,7 +131,7 @@ impl<
         window: (usize, CidT),
         probation: (usize, CidT),
         protected: (usize, CidT),
-        access_scan: &'a dyn Fn(::std::ptr::NonNull<E>) -> (),
+        access_scan: Option<&'a dyn Fn(::std::ptr::NonNull<E>) -> ()>,
     ) -> Self {
         // make sure there is at least one element per cache
         // This assures us that there are at least 3 elements
@@ -176,7 +176,7 @@ impl<
             >::new(
                 real_window.0,
                 CidCtr::new(real_window.1),
-                unsafe { ss.as_ref() },
+                Some(unsafe { ss.as_ref() }),
             ),
             _s: s,
             _slru: crate::slru::SLRUShared::<
@@ -191,7 +191,7 @@ impl<
             >::new(
                 (real_probation.0, CidCtr::new(real_probation.1)),
                 (real_protected.0, CidCtr::new(real_protected.1)),
-                unsafe { ss.as_ref() },
+                Some(unsafe { ss.as_ref() }),
             ),
             _entries: real_window.0 + real_probation.0 + real_protected.0,
             _random: [::rand::random::<usize>(), ::rand::random::<usize>()],
@@ -404,7 +404,7 @@ impl<
     }
     fn scan_counters(
         generation: ::std::ptr::NonNull<counter::Generation>,
-        fscan: &'a dyn Fn(::std::ptr::NonNull<E>) -> (),
+        fscan: Option<&'a dyn Fn(::std::ptr::NonNull<E>) -> ()>,
     ) -> impl Fn(::std::ptr::NonNull<E>) -> () + 'a {
         move |entry: ::std::ptr::NonNull<E>| -> () {
             unsafe {
@@ -416,7 +416,9 @@ impl<
                     // do nothing
                 }
             }
-            fscan(entry)
+            if fscan.is_some() {
+                (fscan.unwrap())(entry)
+            }
         }
     }
 }
