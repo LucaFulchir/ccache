@@ -1,18 +1,16 @@
 [package]
-name = "wtlfu"
+name = "ccache"
 version = "0.1.0"
 authors = ["Luca Fulchir <luker@fenrirproject.org>"]
 edition = "2018"
-description = "Window Tiny LFU implementation"
+description = "Composable caches"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 
 bitfield = "0.13"
-#bitvec = "0.21"
 hashbrown = { version = "0.11", features = ["raw"] }
-num-traits = "0.2"
 rand = "0.8"
 thiserror = "1.0"
 

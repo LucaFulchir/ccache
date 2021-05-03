@@ -80,18 +80,19 @@ where
     _cid_protected: CidT,
     _hmap: ::std::marker::PhantomData<Hmap>,
     _cid: ::std::marker::PhantomData<CidT>,
+    _s: ::std::boxed::Box<dyn Fn(::std::ptr::NonNull<E>) + 'a>,
 }
 
 impl<
         'a,
-        Hmap: hashmap::HashMap<E, K, V, CidCtr, Umeta, HB>,
-        E: user::EntryT<K, V, CidCtr, Umeta>,
-        K: user::Hash,
-        V: user::Val,
-        CidT: user::Cid,
-        CidCtr: counter::CidCounter<CidT>,
-        Umeta: user::Meta<V>,
-        HB: ::std::hash::BuildHasher + Default,
+        Hmap: hashmap::HashMap<E, K, V, CidCtr, Umeta, HB> + 'a,
+        E: user::EntryT<K, V, CidCtr, Umeta> + 'a,
+        K: user::Hash + 'a,
+        V: user::Val + 'a,
+        CidT: user::Cid + 'a,
+        CidCtr: counter::CidCounter<CidT> + 'a,
+        Umeta: user::Meta<V> + 'a,
+        HB: ::std::hash::BuildHasher + Default + 'a,
     > SWTLFUShared<'a, Hmap, E, K, V, CidT, CidCtr, Umeta, HB>
 {
     pub fn new_standard(
@@ -146,9 +147,25 @@ impl<
         } else {
             protected
         };
-        let gen = ::std::boxed::Box::new(counter::Generation::default());
+        let gen = ::std::boxed::Box::<counter::Generation>::new(
+            counter::Generation::default(),
+        );
+        let mut s = ::std::boxed::Box::new(SWTLFUShared::<
+            Hmap,
+            E,
+            K,
+            V,
+            CidT,
+            CidCtr,
+            Umeta,
+            HB,
+        >::scan_counters(
+            (&*gen).into(), access_scan
+        ));
+        let ss = unsafe { ::std::ptr::NonNull::new_unchecked(&mut *s) };
         SWTLFUShared {
-            _window: crate::lru::LRUShared::<'a,
+            _window: crate::lru::LRUShared::<
+                'a,
                 Hmap,
                 E,
                 K,
@@ -159,10 +176,11 @@ impl<
             >::new(
                 real_window.0,
                 CidCtr::new(real_window.1),
-                access_scan,
-                //SWTLFUShared::<Hmap, E, K, V, CidT, CidCtr, Umeta, Fscan, HB>::scan_counters_and_user(&*gen, &access_scan),
+                unsafe { ss.as_ref() },
             ),
-            _slru: crate::slru::SLRUShared::<'a,
+            _s: s,
+            _slru: crate::slru::SLRUShared::<
+                'a,
                 Hmap,
                 E,
                 K,
@@ -173,8 +191,7 @@ impl<
             >::new(
                 (real_probation.0, CidCtr::new(real_probation.1)),
                 (real_protected.0, CidCtr::new(real_protected.1)),
-                access_scan,
-                //SWTLFUShared::<Hmap, E, K, V, CidT, CidCtr, Umeta, Fscan, HB>::scan_counters_and_user(&*gen, &access_scan),
+                unsafe { ss.as_ref() },
             ),
             _entries: real_window.0 + real_probation.0 + real_protected.0,
             _random: [::rand::random::<usize>(), ::rand::random::<usize>()],
@@ -385,26 +402,21 @@ impl<
     pub fn len(&self) -> usize {
         self._window.len() + self._slru.len()
     }
-
-    /*
-    fn scan_counters_and_user<'a>(
-        generation: &'a counter::Generation,
-        fscan: &Fscan,
-        //) -> impl Fn(::std::ptr::NonNull<E>) + 'a {
-    ) -> Fscan {
-        // FIXME: fuck this shit and go to function pointers
-        //) -> Fscan {
-        //|entry| {
-        |entry: ::std::ptr::NonNull<E>| {
+    fn scan_counters(
+        generation: ::std::ptr::NonNull<counter::Generation>,
+        fscan: &'a dyn Fn(::std::ptr::NonNull<E>) -> (),
+    ) -> impl Fn(::std::ptr::NonNull<E>) -> () + 'a {
+        move |entry: ::std::ptr::NonNull<E>| -> () {
             unsafe {
-                if *generation
-                    != (*entry.as_ptr()).get_cache_id().get_generation()
+                if *generation.as_ptr()
+                    != (*entry.as_ref()).get_cache_id().get_generation()
                 {
-                    // FIXME
+                    //halve
+                } else {
+                    // do nothing
                 }
             }
             fscan(entry)
         }
     }
-    */
 }
