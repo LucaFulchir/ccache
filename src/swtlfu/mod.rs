@@ -231,14 +231,16 @@ impl<
             > = (&*self._scan.user_scan).into();
             let nn_status: ::std::ptr::NonNull<ScanStatus> =
                 (&*self._scan.status).into();
-            self._scan.wtlfu_scan = ::std::boxed::Box::new(
-                self.continuous_scan(nn_status.as_ref(), nn_user_scan.as_ref()),
-            );
+            self._scan.wtlfu_scan =
+                ::std::boxed::Box::new(self.continuous_scan(
+                    &*nn_status.as_ptr(),
+                    &*nn_user_scan.as_ptr(),
+                ));
             let nn_wtlfu_scan: ::std::ptr::NonNull<
                 dyn Fn(::std::ptr::NonNull<E>) -> (),
             > = (&*self._scan.wtlfu_scan).into();
-            self._window.set_scanf(Some(nn_wtlfu_scan.as_ref()));
-            self._slru.set_scanf(Some(nn_wtlfu_scan.as_ref()));
+            self._window.set_scanf(Some(&*nn_wtlfu_scan.as_ptr()));
+            self._slru.set_scanf(Some(&*nn_wtlfu_scan.as_ptr()));
         }
         self._window.start_scan();
     }
