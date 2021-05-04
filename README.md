@@ -38,8 +38,8 @@ and stores the counters directly in the hashmap used by the caches.
 * some use of `unsafe` that I hope could be resolved but am not knowledgeable
   enough in rust
 * More documentation needed
-* common traits for all caches?
-* more advanced methods that just get(insert?
+* common traits for all caches
+* more advanced methods that just get/insert?
 * common allocators
 * wrappers to have templates with less parameters
 

@@ -3,9 +3,15 @@ name = "ccache"
 version = "0.1.0"
 authors = ["Luca Fulchir <luker@fenrirproject.org>"]
 edition = "2018"
-description = "Composable caches"
+description = "Composable Caches"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+license = "Apache-2.0"
+homepage = "https://github.com/LucaFulchir/ccache"
+repository = "https://github.com/LucaFulchir/ccache"
+readme = "README.md"
+keywords = [ "cache", "lru", "slru", "wtinylfu", "wtlfu" ]
+categories = [ "caching" ]
+
 
 [dependencies]
 
