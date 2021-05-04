@@ -13,11 +13,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+//! Basic LRU cache
+//!
+//! Extra features: callbacks on get/insert, lazy scan callback
+//!
+//! The lazy scan is a scan that only runs on one more element after each
+//! get/insert  
+//! This means that X elements will be fully scanned only after X get/insert
 
 use crate::hashmap;
+use crate::hashmap::user;
+use crate::hashmap::user::EntryT;
 use crate::results::{InsertResult, InsertResultShared};
-use crate::user;
-use crate::user::EntryT;
 
 type LRUEntry<K, V, Umeta> =
     user::Entry<K, V, ::std::marker::PhantomData<K>, Umeta>;
@@ -30,9 +37,11 @@ type HmapT<K, V, Umeta, HB> = hashmap::SimpleHmap<
     HB,
 >;
 /// LRU implementation that wraps LRUShared
-/// note that we store the value as-is and we have pointers to those,
-/// so **if you need to grow the LRU dynamically, make sure to use `Box<V>
-/// as the value**
+///
+/// note that we store the value as-is and we have pointers to those.
+///
+/// **If you need to grow the LRU dynamically, make sure to use `Box<V>`
+/// as the value** (resize currently not supported)
 // TODO: generalize: K in the first Hashmap template parameter is not
 // necessarily the same K in the user::Entry<K>
 // (e.g: could be a pointer to user::Entry<K>.key)
@@ -63,6 +72,7 @@ impl<
         HB: ::std::hash::BuildHasher + Default,
     > LRU<'a, K, V, Umeta, HB>
 {
+    /// Create a new empty LRU
     pub fn new(
         entries: usize,
         extra_hashmap_capacity: usize,
@@ -85,9 +95,11 @@ impl<
             >::new(entries, ::std::marker::PhantomData, None),
         }
     }
+    /// insert a new entry in the LRU
     pub fn insert(&mut self, key: K, val: V) -> InsertResult<(K, V, Umeta)> {
         self.insert_with_meta(key, val, Umeta::new())
     }
+    /// The same insert, but with metadata
     pub fn insert_with_meta(
         &mut self,
         key: K,
@@ -147,10 +159,12 @@ impl<
             },
         }
     }
+    /// empty the whole LRU
     pub fn clear(&mut self) {
         self._hmap.clear();
         self._lru.clear_shared()
     }
+    /// remove a single element from the lru
     pub fn remove(&mut self, key: &K) -> Option<(V, Umeta)> {
         let (idx, entry) = match self._hmap.get_full(key) {
             None => return None,
@@ -160,10 +174,11 @@ impl<
         let (_, val, meta) = self._hmap.remove_idx(idx).deconstruct();
         Some((val, meta))
     }
+    /// chech if a key exists in the LRU
     pub fn contains_key(&self, key: &K) -> bool {
         self._hmap.get_full(&key).is_some()
     }
-    /// If present, make the entry the head of the LRU, and return pointers to
+    /// If present, make the entry the head of the LRU, and return references to
     /// the values
     pub fn make_head(&mut self, key: &K) -> Option<(&V, &Umeta)> {
         match self._hmap.get_full_mut(key) {
@@ -174,6 +189,7 @@ impl<
             }
         }
     }
+    /// get references to an entry
     pub fn get(&mut self, key: &K) -> Option<(&V, &Umeta)> {
         match self._hmap.get_full_mut(key) {
             None => None,
@@ -183,6 +199,7 @@ impl<
             }
         }
     }
+    /// get a mutable reference to the entry
     pub fn get_mut(&mut self, key: &K) -> Option<(&mut V, &mut Umeta)> {
         match self._hmap.get_full_mut(key) {
             None => None,
@@ -194,6 +211,8 @@ impl<
         }
     }
 }
+
+/// Actual implementation of the LRU on a shared hashmap
 pub struct LRUShared<'a, Hmap, E, K, V, CidT, Umeta, HB>
 where
     Hmap: hashmap::HashMap<E, K, V, CidT, Umeta, HB>,
@@ -230,6 +249,7 @@ impl<
     > LRUShared<'a, Hmap, E, K, V, CidT, Umeta, HB>
 {
     /// Build a LRU that works on someone else's hasmap
+    ///
     /// In this case each cache should have a different `Cid` (Cache ID) so that
     /// everyone known whose elements is being used, and call the proper
     /// cache methods
@@ -252,6 +272,7 @@ impl<
             _scan: crate::scan::Scan::new(access_scan),
         }
     }
+    /// change the scan callback
     pub fn set_scanf(
         &mut self,
         access_scan: Option<&'a dyn Fn(::std::ptr::NonNull<E>) -> ()>,
@@ -259,9 +280,12 @@ impl<
         self._scan.set_scanf(access_scan)
     }
 
-    /// `insert_shared` does not actually insert anything. It will only fix
-    /// the LRU linked lists after something has been inserted by the parent
-    /// note that ~maybe_old_entry` should be != `None` if and only if the
+    /// `insert_shared` does not actually insert anything.
+    ///
+    /// It will only fix the LRU linked lists after something has been inserted
+    /// by the parent.
+    ///
+    /// Note that `maybe_old_entry` is != `None` if and only if the
     /// ols entry is part of the same cache
     pub fn insert_shared(
         &mut self,
@@ -412,11 +436,15 @@ impl<
             }
         }
     }
+    /// reset the LRU
     pub fn clear_shared(&mut self) {
         self._head = None;
         self._tail = None;
         self._scan.stop();
     }
+    /// remove the pointers to this element in the LRU.
+    ///
+    /// Does not actually remove the element, that is done by the caller
     pub fn remove_shared(&mut self, entry: &E) {
         self._scan.check_and_next(entry.into());
         if None == entry.get_head_ptr() {
@@ -511,13 +539,20 @@ impl<
             }
         }
     }
+    /// get the LRU cache id
     pub fn get_cache_id(&self) -> CidT {
         self._cache_id
     }
+    /// Used when composing caches, run the callback on the entry
+    ///
+    /// This method should be passed down between parent/child cache
+    /// and only the final cache which owns the element should execute it
     pub fn on_get(&mut self, entry: &mut E) {
         entry.user_on_get();
         self._scan.apply_next();
     }
+    /// start the lazy scan  
+    /// The scan will execute on the whole LRU but only once
     pub fn start_scan(&mut self) {
         match self._scan.is_running() {
             false => match self._head {
@@ -527,12 +562,15 @@ impl<
             true => {}
         }
     }
+    /// check if the scan is still running
     pub fn is_scan_running(&self) -> bool {
         self._scan.is_running()
     }
+    /// get the LRU capacity
     pub fn capacity(&self) -> usize {
         self._capacity
     }
+    /// get the LRU usage
     pub fn len(&self) -> usize {
         self._used
     }

@@ -13,12 +13,43 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+//! W-TinyLFU cache with lazy scan enanchment
+//!
+//! TLFU is a series of counters and an SLRU cache.
+//! W-TinyLFU adds another LRU window in front of all of this.
+//!
+//! The Window is 1% of the total cache, while the main SLRU is divided in
+//! 20% probation, 80% protected cache.
+//!
+//! WTLFU keeps a bloom filter of the Window.  
+//! If an entry in the Window receives
+//! a HIT it is moved to the SLRU, where its access are counted better.  
+//! This second counters can be limited to a few bits, but they are kept
+//! separate from the bloom filter for efficiency.  
+//!
+//! If the cache is designed for X entries, after X inserts we have
+//! to halve all counters. This implies blocking all the cache
+//!
+//! Our variant, the Scan-Window-TinyLFU, is your average WLTFU
+//! but we keep full counters for all elements.  
+//! The cache is already wasting a lot of space in memory due to memory
+//! alignment caused by the very short Cache Id and pointers that need to be
+//! memory-aligned.
+//!
+//! We reuse that otherwise wasted space to track the generation and the counter
+//! for the element, and apply a "lazy" scan that eventually will scan
+//! everything
+//!
+//! The "Scan" part works simply by tracking the generation of the counter
+//! (`Day`/`Night`) and if the generation is not the current one, the counter
+//! is halved. To assure that all counters are halved every X inserts,
+//! every get/insert will scan just one more element.
 
 mod counter;
 
 use crate::hashmap;
+use crate::hashmap::user;
 use crate::results::{InsertResult, InsertResultShared};
-use crate::user;
 
 #[derive(PartialEq, Eq)]
 enum ScanStatus {
@@ -40,37 +71,13 @@ where
     _entry: ::std::marker::PhantomData<E>,
 }
 
-/// TinyLFU is a series of counters and an SLRU cache.
-/// W-TinyLFU adds another LRU window in front of all of this.
+/// Actual implementation of the Shared `Scan-Window-Tiny-LFU`
 ///
-/// The Window is 1% of the total cache, while the main SLRU is divided in
-/// 20% probation, 80% protected cache.
+/// Note that no elements get actually added ot removed to the hashmap here,
+/// we only fix the various sub-caches and track all counters.
 ///
-/// WTLFU keeps a bloom filter of the Window. If a entry in the Window receives
-/// a HIT it is moved to the SLRU, where its access are counted better.  
-/// This second counters can be limited to a few bits, but they are kept
-/// separate from the bloom filter for efficiency.  
-///
-/// If the cache is designed for X entries, after X inserts we have
-/// to halve all counters. This implies blocking all the cache, which I did
-/// not found acceptable.
-///
-/// Therefore here we have the Scan-Window-TinyLFU, which is your average WLTFU
-/// but we keep full counters for all elements.  
-/// Due to memory aligment we are already wasting the space for every entry
-/// anyway.
-///
-/// The "Scan" part works simply by tracking the generation of the counter
-/// (`Day`/`Night`) and if the generation is not the current one, the counter
-/// is halved. To assure that all counters are halved every X inserts,
-/// every get/insert will scan just one more element.
-///
-/// The reason why we are already wasting the memory and we can repurpose it
-/// to counters is that our "Shared" caches are designed to be composable
-/// over the same hashmap. This saves us a lot of delete/insert when each
-/// element should be moved between caches, but we now need something that
-/// tracks to which cache an entry belongs to (the `Cid` -- Cache Id)
-
+/// Just like [LRU](crate::lru::LRUShared) and [SLRU](crate::slru::SLRUShared)
+/// the actual adding/deletion must be done by the caller
 pub struct SWTLFUShared<'a, Hmap, E, K, V, CidT, CidCtr, Umeta, HB>
 where
     Hmap: hashmap::HashMap<E, K, V, CidCtr, Umeta, HB>,
@@ -108,6 +115,9 @@ impl<
         HB: ::std::hash::BuildHasher + Default + 'a,
     > SWTLFUShared<'a, Hmap, E, K, V, CidT, CidCtr, Umeta, HB>
 {
+    /// Build a Scan W-TLFU with standard split between the caches
+    ///
+    /// can be given an optional callback for a user-run-scan
     pub fn new_standard(
         window_cid: CidT,
         probation_cid: CidT,
@@ -140,6 +150,9 @@ impl<
             access_scan,
         )
     }
+    /// Build a Scan W-TLFU with a custom split between the cacnes
+    ///
+    /// can be given an optional callback for a user-run-scan
     pub fn new(
         window: (usize, CidT),
         probation: (usize, CidT),
@@ -229,6 +242,7 @@ impl<
         }
         self._window.start_scan();
     }
+    /// change the user scan function
     pub fn set_scanf(
         &mut self,
         access_scan: Option<&'a dyn Fn(::std::ptr::NonNull<E>) -> ()>,
@@ -274,6 +288,10 @@ impl<
         }
         toevict
     }
+    /// An element has been added by the caller, fix the various sub-caches
+    ///
+    /// Note that `maybe_old_entry` is ` != None` only if the clash happened in
+    /// this cache
     pub fn insert_shared(
         &mut self,
         hmap: &mut Hmap,
@@ -359,10 +377,12 @@ impl<
             }
         }
     }
+    /// reset the cache
     pub fn clear_shared(&mut self) {
         self._window.clear_shared();
         self._slru.clear_shared();
     }
+    /// fix the sub-caches so that it is safe to remove from the hashmap
     pub fn remove_shared(&mut self, entry: &E) {
         let res = if entry.get_cache_id().get_cid() == self._cid_window {
             self._window.remove_shared(entry)
@@ -372,9 +392,15 @@ impl<
         self.update_scan_status();
         res
     }
+    /// return the cache ids, in order:
+    /// * Window
+    /// * probatory
+    /// * protected
     pub fn get_cache_ids(&self) -> [CidT; 3] {
         [self._cid_window, self._cid_probation, self._cid_protected]
     }
+    /// if a higher-level cache is using this one, call this to make sure
+    /// that the right cache will handle the on-get callback
     pub fn on_get(&mut self, entry: &mut E) {
         if entry.get_cache_id().get_cid() == self._cid_window {
             self._window.on_get(entry);
@@ -383,9 +409,16 @@ impl<
         }
         self.update_scan_status();
     }
+    /// start the user-scan
+    ///
+    /// Note: It will run once, but while it will stop at the last element, it
+    /// is not guaranteed that it will start from the first  
+    /// This meas that this will very probably never scan all elements unless
+    /// you keep reissuing it after it has stopped
     pub fn start_scan(&mut self) {
         *self._scan.status = ScanStatus::Running;
     }
+    /// check if the scan is running
     pub fn is_scan_running(&self) -> bool {
         return *self._scan.status != ScanStatus::Stopped;
     }
@@ -406,9 +439,11 @@ impl<
             }
         }
     }
+    /// get the cache max capacity
     pub fn capacity(&self) -> usize {
         self._entries
     }
+    /// get the current elements in the cache
     pub fn len(&self) -> usize {
         self._window.len() + self._slru.len()
     }

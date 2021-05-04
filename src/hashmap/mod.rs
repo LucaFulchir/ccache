@@ -13,20 +13,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+/// user-reimplementable types for the hashmap
+pub mod user;
 use std::hash::Hasher;
 
-/// Use this trait to wrap your hashmap implementation
-/// We need this since the stdlib does not implement the methods
-/// This will be all used in a single-thread context
+/// Trait to reimplement to use an hashmap with [ccache](crate)
 
 // TODO: resizing
 pub trait HashMap<Entry, Key, Val, Cid, Umeta, BuildHasher>
 where
-    Entry: crate::user::EntryT<Key, Val, Cid, Umeta>,
-    Key: crate::user::Hash,
-    Val: crate::user::Val,
-    Cid: crate::user::Cid,
-    Umeta: crate::user::Meta<Val>,
+    Entry: user::EntryT<Key, Val, Cid, Umeta>,
+    Key: user::Hash,
+    Val: user::Val,
+    Cid: user::Cid,
+    Umeta: user::Meta<Val>,
     BuildHasher: ::std::hash::BuildHasher,
 {
     /// Construct an Hashmap with the given capacity
@@ -78,25 +79,29 @@ where
     fn hasher(&self) -> &BuildHasher;
 }
 
+/// Simple, stable hashmap with indexes
+///
 /// This simple hashmap has some limitations:
 /// * It will not resize
 /// * It always has the same maximum size
 /// * Should not be used in multithread
+///
 /// But it should be efficient enugh, and stable
 ///
 /// So if you add or remove elements, the other will not be reshuffled at any
 /// time
 ///
-/// It also supports O(1) access via index
+/// It also supports O(1) access via indexes
 ///
-/// Since it is built around `user::EntryT` you can even add metadata
+/// Since it is built around [`user::EntryT`] you can even add metadata
 /// that will receive callbacks on get/insert operations, and you can combine
-/// multiple caches and distinguish them via the `Cid` type
+/// multiple caches and distinguish them via the [`user::Cid`]
 ///
-/// In reaimplementing the needed types, remember that:
-/// * `EntryT` must have a default type that will be used as "empty-space"
-///   marker in the hash_map
-/// * Cid need the default type which is used by EntryT to mark "empty-space"
+/// In reimplementing the needed types, remember that:
+/// * [`user::EntryT`] must have a default type that will be used as
+///   "empty-space" marker in the hash_map
+/// * [`user::Cid`] needs the default type which is used by EntryT to mark
+///   "empty-space"
 // TODO: add allocator
 pub struct SimpleHmap<
     Entry,
@@ -106,11 +111,11 @@ pub struct SimpleHmap<
     Umeta,
     BuildHasher = std::collections::hash_map::RandomState,
 > where
-    Entry: crate::user::EntryT<Key, Val, Cid, Umeta>,
-    Key: crate::user::Hash,
-    Val: crate::user::Val,
-    Cid: crate::user::Cid,
-    Umeta: crate::user::Meta<Val>,
+    Entry: user::EntryT<Key, Val, Cid, Umeta>,
+    Key: user::Hash,
+    Val: user::Val,
+    Cid: user::Cid,
+    Umeta: user::Meta<Val>,
     BuildHasher: ::std::hash::BuildHasher + Default,
 {
     usage: usize,
@@ -125,11 +130,11 @@ pub struct SimpleHmap<
 impl<Entry, Key, Val, Cid, Umeta, BuildHasher>
     SimpleHmap<Entry, Key, Val, Cid, Umeta, BuildHasher>
 where
-    Entry: crate::user::EntryT<Key, Val, Cid, Umeta>,
-    Key: crate::user::Hash,
-    Val: crate::user::Val,
-    Cid: crate::user::Cid,
-    Umeta: crate::user::Meta<Val>,
+    Entry: user::EntryT<Key, Val, Cid, Umeta>,
+    Key: user::Hash,
+    Val: user::Val,
+    Cid: user::Cid,
+    Umeta: user::Meta<Val>,
     BuildHasher: ::std::hash::BuildHasher + Default,
 {
     pub fn with_capacity(capacity: usize) -> Self {
@@ -350,11 +355,11 @@ impl<Entry, Key, Val, Cid, Umeta, BuildHasher>
     HashMap<Entry, Key, Val, Cid, Umeta, BuildHasher>
     for SimpleHmap<Entry, Key, Val, Cid, Umeta, BuildHasher>
 where
-    Entry: crate::user::EntryT<Key, Val, Cid, Umeta>,
-    Key: crate::user::Hash,
-    Val: crate::user::Val,
-    Cid: crate::user::Cid,
-    Umeta: crate::user::Meta<Val>,
+    Entry: user::EntryT<Key, Val, Cid, Umeta>,
+    Key: user::Hash,
+    Val: user::Val,
+    Cid: user::Cid,
+    Umeta: user::Meta<Val>,
     BuildHasher: ::std::hash::BuildHasher + Default,
 {
     fn with_capacity(capacity: usize) -> Self {

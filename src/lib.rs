@@ -14,10 +14,37 @@
  * limitations under the License.
  */
 
+//! A single-thread only library to implement multiple caches over the same
+//! hashmap
+//!
+//! # Single thread
+//! All of this is currently designed to be used only in single-thread
+//! applications  
+//! The project was born out of a need for an efficient cache for
+//! a heavily sharded application, so everything is designed purely for
+//! single-thread.  
+//! Contributions are welcome for multithread support
+//!
+//! # Shared hashmap
+//!
+//! Any hashmap is usable as long as the corresponding trait is implemented
+//! We have included a basic hashmap that lets you access each slot by its
+//! index ! and is stable, so that insertion or removal does not reshuffle
+//! elements
+//!
+//! # Composable caches
+//! Each cache is usable on the same hashmap, so they must coordinate a bit
+//! through its The project currently implements:
+//! * [LRU](lru)
+//! * [SLRU](slru)
+//! * [Scan-W-TLFU](swtlfu), a W-TLFU variant
+
+/// stable hashmap implementation, based on `hashbrown::raw::RawTable`
 pub mod hashmap;
 pub mod lru;
+/// common result for insert/get operations
 pub mod results;
+// not public, wrapper to scan each entry
 mod scan;
 pub mod slru;
 pub mod swtlfu;
-pub mod user;

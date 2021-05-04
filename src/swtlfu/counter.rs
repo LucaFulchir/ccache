@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+use crate::hashmap::user;
+
 // TODO: implement small counter optimization
 
 // We only have two generations to keep track of.
@@ -56,9 +58,9 @@ impl Default for Generation {
     }
 }
 
-pub trait CidCounter<Cid>: crate::user::Cid
+pub trait CidCounter<Cid>: user::Cid
 where
-    Cid: crate::user::Cid,
+    Cid: user::Cid,
 {
     fn new(cid: Cid) -> Self;
     fn get_cid(&self) -> Cid;
@@ -84,7 +86,7 @@ impl Default for WTLFUCid {
         WTLFUCid::None
     }
 }
-impl crate::user::Cid for WTLFUCid {}
+impl user::Cid for WTLFUCid {}
 impl From<u8> for WTLFUCid {
     fn from(raw: u8) -> Self {
         match raw {
@@ -112,7 +114,7 @@ impl From<u8> for WTLFUCid {
     #[inline]
     pub u32, g_counter, s_counter: 29, 0;
 }
-impl crate::user::Cid for Full32 {}
+impl user::Cid for Full32 {}
 
 impl Default for Full32 {
     fn default() -> Self {

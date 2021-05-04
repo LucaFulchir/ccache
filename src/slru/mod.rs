@@ -14,10 +14,18 @@
  * limitations under the License.
  */
 
+//! Basic SLRU cache
+//!
+//! Extra features: callbacks on get/insert, lazy scan callback
+//!
+//! The lazy scan is a scan that only runs on one more element after each
+//! get/insert  
+//! This means that X elements will be fully scanned only after X get/insert
+
 use crate::hashmap;
+use crate::hashmap::user;
+use crate::hashmap::user::EntryT;
 use crate::results::{InsertResult, InsertResultShared};
-use crate::user;
-use crate::user::EntryT;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct SLRUCidNone {}
@@ -58,11 +66,15 @@ type SLRUEntry<K, V, Umeta> = user::Entry<K, V, SLRUCid, Umeta>;
 type HmapT<K, V, Umeta, HB> =
     hashmap::SimpleHmap<SLRUEntry<K, V, Umeta>, K, V, SLRUCid, Umeta, HB>;
 
-/// SLRU ( https://en.wikipedia.org/wiki/Cache_replacement_policies#Segmented_LRU_(SLRU) )
-/// is a Segmented LRU it consists of two LRU:
+/// [SLRU](https://en.wikipedia.org/wiki/Cache_replacement_policies#Segmented_LRU_(SLRU))
+/// implementation
+///
+/// SLRU is a Segmented LRU it consists of two LRU:
 ///  * probation LRU: for items that have been just added
 ///  * protected LRU: items that were in the probation LRU and received a HIT
-/// W-TinyLRU specifies an 20-80 split, with 80% for the probation LRU
+///
+/// W-TinyLFU specifies an 20-80 split, with 80% for the probation LRU
+/// You can define your own slit here
 pub struct SLRU<'a, K, V, Umeta, HB>
 where
     K: user::Hash,
@@ -91,6 +103,8 @@ impl<
         HB: ::std::hash::BuildHasher + Default,
     > SLRU<'a, K, V, Umeta, HB>
 {
+    /// new SLRU, with custom number of entries for the probatory and protected
+    /// splits
     pub fn new(
         probation_entries: usize,
         protected_entries: usize,
@@ -126,9 +140,11 @@ impl<
             ),
         }
     }
+    /// insert a new element. Can return a clash
     pub fn insert(&mut self, key: K, val: V) -> InsertResult<(K, V, Umeta)> {
         self.insert_with_meta(key, val, Umeta::new())
     }
+    /// insert a new element, but with metadata
     pub fn insert_with_meta(
         &mut self,
         key: K,
@@ -183,6 +199,7 @@ impl<
         }
     }
 
+    /// remove an element
     pub fn remove(&mut self, key: &K) -> Option<(V, Umeta)> {
         let (idx, entry) = match self._hmap.get_full(key) {
             None => return None,
@@ -192,10 +209,12 @@ impl<
         let (_, val, meta) = self._hmap.remove_idx(idx).deconstruct();
         Some((val, meta))
     }
+    /// clear out all the SLRU
     pub fn clear(&mut self) {
         self._hmap.clear();
         self._slru.clear_shared()
     }
+    /// Get references to the element's data
     pub fn get(&mut self, key: &K) -> Option<(&V, &Umeta)> {
         match self._hmap.get_full_mut(key) {
             None => None,
@@ -205,6 +224,7 @@ impl<
             }
         }
     }
+    /// get a mutable reference to the element's data
     pub fn get_mut(&mut self, key: &K) -> Option<(&mut V, &mut Umeta)> {
         match self._hmap.get_full_mut(key) {
             None => None,
@@ -221,6 +241,13 @@ enum ScanStatus {
     RunningProbation,
     RunningProtected,
 }
+
+/// Actual implementation of the SLRU on a shared hashmap
+///
+/// Note that Insert/Remove do not actually insert anything in the hashmap.
+/// That must be done by the caller. We only fix all the pointers and SLRU
+/// status
+
 pub struct SLRUShared<'a, Hmap, E, K, V, CidT, Umeta, HB>
 where
     Hmap: hashmap::HashMap<E, K, V, CidT, Umeta, HB>,
@@ -247,6 +274,8 @@ impl<
         HB: ::std::hash::BuildHasher + Default,
     > SLRUShared<'a, Hmap, E, K, V, CidT, Umeta, HB>
 {
+    /// new SLRU with custom number of probatory/protected entries
+    /// plus an optional callback for the lazy scan
     pub fn new(
         probation: (usize, CidT),
         protected: (usize, CidT),
@@ -280,6 +309,7 @@ impl<
             _scanstatus: ScanStatus::Stopped,
         }
     }
+    /// change the scan callback
     pub fn set_scanf(
         &mut self,
         access_scan: Option<&'a dyn Fn(::std::ptr::NonNull<E>) -> ()>,
@@ -287,6 +317,9 @@ impl<
         self._probation.set_scanf(access_scan);
         self._protected.set_scanf(access_scan)
     }
+    /// an itam has been inserted by the caller, fix the SLRU
+    ///
+    /// `maybe_old_entry` must be `!= None` only if the element is in the SLRU
     pub fn insert_shared(
         &mut self,
         hmap: &mut Hmap,
@@ -363,11 +396,14 @@ impl<
             }
         }
     }
+    /// Reset the SLRU state
     pub fn clear_shared(&mut self) {
         self._probation.clear_shared();
         self._protected.clear_shared();
         self._scanstatus = ScanStatus::Stopped;
     }
+    /// do not actually remove the element, just fix the SLRU so that it is not
+    /// considered anymore and actual removal is safe
     pub fn remove_shared(&mut self, entry: &E) {
         let res = if entry.get_cache_id() == self._probation.get_cache_id() {
             self._probation.remove_shared(entry)
@@ -377,12 +413,15 @@ impl<
         self.update_scan_status();
         res
     }
+    /// return the cache ids for `(probatory, protected)`
     pub fn get_cache_ids(&self) -> (CidT, CidT) {
         (
             self._probation.get_cache_id(),
             self._protected.get_cache_id(),
         )
     }
+    /// Should be called only by the parent, run the on-get callback on the
+    /// correct LRU
     pub fn on_get(&mut self, entry: &mut E) {
         if entry.get_cache_id() == self._probation.get_cache_id() {
             self._probation.on_get(entry);
@@ -391,6 +430,8 @@ impl<
         }
         self.update_scan_status();
     }
+    /// start the scan callbacks on the SLRU
+    /// scan will execute only once on the whole SLRU
     pub fn start_scan(&mut self) {
         self._probation.start_scan();
         match self._probation.is_scan_running() {
@@ -410,6 +451,7 @@ impl<
             }
         }
     }
+    /// return scan status
     pub fn is_scan_running(&self) -> bool {
         self._scanstatus != ScanStatus::Stopped
     }
@@ -435,9 +477,11 @@ impl<
             }
         }
     }
+    /// return max SLRU size
     pub fn capacity(&self) -> usize {
         self._probation.capacity() + self._protected.capacity()
     }
+    /// return used SLRU size
     pub fn len(&self) -> usize {
         self._probation.len() + self._protected.len()
     }
