@@ -280,6 +280,13 @@ impl<
             _scanstatus: ScanStatus::Stopped,
         }
     }
+    pub fn set_scanf(
+        &mut self,
+        access_scan: Option<&'a dyn Fn(::std::ptr::NonNull<E>) -> ()>,
+    ) {
+        self._probation.set_scanf(access_scan);
+        self._protected.set_scanf(access_scan)
+    }
     pub fn insert_shared(
         &mut self,
         hmap: &mut Hmap,

@@ -23,8 +23,21 @@ use crate::user;
 #[derive(PartialEq, Eq)]
 enum ScanStatus {
     Stopped,
-    RunningWindow,
-    RunningSLRU,
+    Running,
+}
+
+struct ScanScan<'a, F: ?Sized, E>
+where
+    Box<F>: Fn(::std::ptr::NonNull<E>) -> (),
+{
+    // Main scan function: will keep scanning all wtlfu continuously
+    // should never be stopped
+    wtlfu_scan: ::std::boxed::Box<F>,
+    // user accitional scan function. can be stopped
+    user_scan:
+        ::std::boxed::Box<Option<&'a dyn Fn(::std::ptr::NonNull<E>) -> ()>>,
+    status: ::std::boxed::Box<ScanStatus>,
+    _entry: ::std::marker::PhantomData<E>,
 }
 
 /// TinyLFU is a series of counters and an SLRU cache.
@@ -73,14 +86,14 @@ where
     _slru: crate::slru::SLRUShared<'a, Hmap, E, K, V, CidCtr, Umeta, HB>,
     _entries: usize,
     _random: [usize; 2],
-    _scanstatus: ScanStatus,
     _generation: ::std::boxed::Box<counter::Generation>,
     _cid_window: CidT,
     _cid_probation: CidT,
     _cid_protected: CidT,
     _hmap: ::std::marker::PhantomData<Hmap>,
     _cid: ::std::marker::PhantomData<CidT>,
-    _s: ::std::boxed::Box<dyn Fn(::std::ptr::NonNull<E>) + 'a>,
+    //_s: ::std::boxed::Box<dyn Fn(::std::ptr::NonNull<E>) + 'a>,
+    _scan: ScanScan<'a, dyn Fn(::std::ptr::NonNull<E>) + 'a, E>,
 }
 
 impl<
@@ -150,20 +163,7 @@ impl<
         let gen = ::std::boxed::Box::<counter::Generation>::new(
             counter::Generation::default(),
         );
-        let mut s = ::std::boxed::Box::new(SWTLFUShared::<
-            Hmap,
-            E,
-            K,
-            V,
-            CidT,
-            CidCtr,
-            Umeta,
-            HB,
-        >::scan_counters(
-            (&*gen).into(), access_scan
-        ));
-        let ss = unsafe { ::std::ptr::NonNull::new_unchecked(&mut *s) };
-        SWTLFUShared {
+        let mut sw_tlfu = SWTLFUShared {
             _window: crate::lru::LRUShared::<
                 'a,
                 Hmap,
@@ -174,11 +174,16 @@ impl<
                 Umeta,
                 HB,
             >::new(
-                real_window.0,
-                CidCtr::new(real_window.1),
-                Some(unsafe { ss.as_ref() }),
+                real_window.0, CidCtr::new(real_window.1), None
             ),
-            _s: s,
+            _scan: ScanScan {
+                wtlfu_scan: ::std::boxed::Box::new(
+                    move |_e: ::std::ptr::NonNull<E>| {},
+                ),
+                user_scan: ::std::boxed::Box::new(access_scan),
+                status: ::std::boxed::Box::new(ScanStatus::Stopped),
+                _entry: ::std::marker::PhantomData,
+            },
             _slru: crate::slru::SLRUShared::<
                 'a,
                 Hmap,
@@ -191,18 +196,44 @@ impl<
             >::new(
                 (real_probation.0, CidCtr::new(real_probation.1)),
                 (real_protected.0, CidCtr::new(real_protected.1)),
-                Some(unsafe { ss.as_ref() }),
+                None,
             ),
             _entries: real_window.0 + real_probation.0 + real_protected.0,
             _random: [::rand::random::<usize>(), ::rand::random::<usize>()],
-            _scanstatus: ScanStatus::Stopped,
             _generation: gen,
             _cid_window: real_window.1,
             _cid_probation: real_probation.1,
             _cid_protected: real_protected.1,
             _hmap: ::std::marker::PhantomData,
             _cid: ::std::marker::PhantomData,
+        };
+        sw_tlfu.set_main_scanf_once();
+        sw_tlfu
+    }
+    pub fn set_main_scanf_once(&mut self) {
+        // trick rust into ignoring lifetimes through NonNull
+        unsafe {
+            let nn_user_scan: ::std::ptr::NonNull<
+                Option<&'a dyn Fn(::std::ptr::NonNull<E>) -> ()>,
+            > = (&*self._scan.user_scan).into();
+            let nn_status: ::std::ptr::NonNull<ScanStatus> =
+                (&*self._scan.status).into();
+            self._scan.wtlfu_scan = ::std::boxed::Box::new(
+                self.continuous_scan(nn_status.as_ref(), nn_user_scan.as_ref()),
+            );
+            let nn_wtlfu_scan: ::std::ptr::NonNull<
+                dyn Fn(::std::ptr::NonNull<E>) -> (),
+            > = (&*self._scan.wtlfu_scan).into();
+            self._window.set_scanf(Some(nn_wtlfu_scan.as_ref()));
+            self._slru.set_scanf(Some(nn_wtlfu_scan.as_ref()));
         }
+        self._window.start_scan();
+    }
+    pub fn set_scanf(
+        &mut self,
+        access_scan: Option<&'a dyn Fn(::std::ptr::NonNull<E>) -> ()>,
+    ) {
+        *self._scan.user_scan = access_scan;
     }
     // return ALL indexes chosen deterministically based on the one in input
     // make sure they are different and that the initial index is included
@@ -353,47 +384,26 @@ impl<
         self.update_scan_status();
     }
     pub fn start_scan(&mut self) {
-        if self._scanstatus != ScanStatus::Stopped {
-            return;
-        }
-        self._window.start_scan();
-        match self._window.is_scan_running() {
-            true => {
-                self._scanstatus = ScanStatus::RunningWindow;
-            }
-            false => {
-                self._slru.start_scan();
-                match self._slru.is_scan_running() {
-                    true => {
-                        self._scanstatus = ScanStatus::RunningSLRU;
-                    }
-                    false => {
-                        self._scanstatus = ScanStatus::Stopped;
-                    }
-                }
-            }
-        }
+        *self._scan.status = ScanStatus::Running;
     }
     pub fn is_scan_running(&self) -> bool {
-        return self._scanstatus != ScanStatus::Stopped;
+        return *self._scan.status != ScanStatus::Stopped;
     }
     fn update_scan_status(&mut self) {
-        //FIXME: make continuous
-        match self._scanstatus {
-            ScanStatus::Stopped => {}
-            ScanStatus::RunningWindow => match self._window.is_scan_running() {
-                true => {}
-                false => {
-                    self._slru.start_scan();
-                    self._scanstatus = ScanStatus::RunningSLRU;
-                }
-            },
-            ScanStatus::RunningSLRU => match self._slru.is_scan_running() {
-                true => {}
-                false => {
-                    self._scanstatus = ScanStatus::Stopped;
-                }
-            },
+        // scanning is always running for wtlfu
+        // but the user can stop its own can function
+        match self._window.is_scan_running() {
+            true => {}
+            false => {
+                self._slru.start_scan();
+            }
+        };
+        match self._slru.is_scan_running() {
+            true => {}
+            false => {
+                self._window.start_scan();
+                *self._scan.status = ScanStatus::Stopped;
+            }
         }
     }
     pub fn capacity(&self) -> usize {
@@ -402,21 +412,25 @@ impl<
     pub fn len(&self) -> usize {
         self._window.len() + self._slru.len()
     }
-    fn scan_counters(
-        generation: ::std::ptr::NonNull<counter::Generation>,
-        fscan: Option<&'a dyn Fn(::std::ptr::NonNull<E>) -> ()>,
+    fn continuous_scan(
+        &self,
+        status: &'a ScanStatus,
+        fscan: &'a Option<&'a dyn Fn(::std::ptr::NonNull<E>) -> ()>,
     ) -> impl Fn(::std::ptr::NonNull<E>) -> () + 'a {
+        let generation: ::std::ptr::NonNull<counter::Generation> =
+            (&*self._generation).into();
         move |entry: ::std::ptr::NonNull<E>| -> () {
             unsafe {
                 if *generation.as_ptr()
                     != (*entry.as_ref()).get_cache_id().get_generation()
                 {
-                    //halve
+                    entry.as_ref().get_cache_id().halve();
+                    entry.as_ref().get_cache_id().flip_generation();
                 } else {
                     // do nothing
                 }
             }
-            if fscan.is_some() {
+            if fscan.is_some() && *status == ScanStatus::Running {
                 (fscan.unwrap())(entry)
             }
         }

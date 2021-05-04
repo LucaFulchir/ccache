@@ -252,6 +252,13 @@ impl<
             _scan: crate::scan::Scan::new(access_scan),
         }
     }
+    pub fn set_scanf(
+        &mut self,
+        access_scan: Option<&'a dyn Fn(::std::ptr::NonNull<E>) -> ()>,
+    ) {
+        self._scan.set_scanf(access_scan)
+    }
+
     /// `insert_shared` does not actually insert anything. It will only fix
     /// the LRU linked lists after something has been inserted by the parent
     /// note that ~maybe_old_entry` should be != `None` if and only if the

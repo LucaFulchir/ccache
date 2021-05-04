@@ -50,6 +50,12 @@ impl<
             _umeta: ::std::marker::PhantomData,
         }
     }
+    pub fn set_scanf(
+        &mut self,
+        f: Option<&'a dyn Fn(::std::ptr::NonNull<E>) -> ()>,
+    ) {
+        self.f = f
+    }
     pub fn is_running(&self) -> bool {
         self.last != None
     }
