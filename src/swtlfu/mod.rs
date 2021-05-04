@@ -92,10 +92,10 @@ where
     _cid_protected: CidT,
     _hmap: ::std::marker::PhantomData<Hmap>,
     _cid: ::std::marker::PhantomData<CidT>,
-    //_s: ::std::boxed::Box<dyn Fn(::std::ptr::NonNull<E>) + 'a>,
     _scan: ScanScan<'a, dyn Fn(::std::ptr::NonNull<E>) + 'a, E>,
 }
 
+// FIXME: lifetimes here seem all wrong, we're doing some thing wrong...
 impl<
         'a,
         Hmap: hashmap::HashMap<E, K, V, CidCtr, Umeta, HB> + 'a,
@@ -210,7 +210,7 @@ impl<
         sw_tlfu.set_main_scanf_once();
         sw_tlfu
     }
-    pub fn set_main_scanf_once(&mut self) {
+    fn set_main_scanf_once(&mut self) {
         // trick rust into ignoring lifetimes through NonNull
         unsafe {
             let nn_user_scan: ::std::ptr::NonNull<

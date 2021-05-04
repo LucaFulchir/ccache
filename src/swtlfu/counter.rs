@@ -15,8 +15,6 @@
  */
 
 // TODO: implement small counter optimization
-// the idea will be to have a bitvector under us, and implement From<...>
-// methods to load/save on the right bits
 
 // We only have two generations to keep track of.
 // There is no "new" and "old" generation, since
